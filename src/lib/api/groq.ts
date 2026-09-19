@@ -2,15 +2,26 @@
 //
 // Model choice: every model below is served on Groq's free developer tier
 // (no credit card, rate-limited to ~30 req/min & 14,400 req/day rather than
-// billed per token). We stick to OpenAI's open-weight GPT-OSS models —
-// Groq's own flagship free models — rather than mixing in priced/limited-
-// availability models, so nothing here can surprise-bill the user.
+// billed per token). Every one is open-weight (not merely free-to-call) —
+// OpenAI's GPT-OSS and Alibaba's Qwen3 series — so nothing here can
+// surprise-bill the user and there's no proprietary-weights lock-in.
 //
 // NOTE: `qwen/qwen3-32b` (the previous completion model) was deprecated and
 // shut down by Groq on 07/17/26. Groq's own migration guidance points
 // qwen3-32b users to `openai/gpt-oss-120b` (quality) or `openai/gpt-oss-20b`
 // (speed) — we use the 20B variant for completions since inline/ghost-text
 // completion is latency-sensitive and needs a fast round-trip.
+//
+// `qwen/qwen3.8-27b` — Groq's current free-tier Qwen model for agentic
+// coding, with a 131K context window and confirmed tool-calling support,
+// so it works with Agent Mode's function-calling flow with no other code
+// changes needed.
+//
+// CORRECTION: an earlier version of this file used `qwen/qwen3.6-27b`.
+// Groq has since silently withdrawn that model from GroqCloud (no formal
+// deprecation notice — it was simply removed; calls to it now 404).
+// qwen3.8-27b is the surviving model in that family and is used here
+// instead.
 import type { AgentMessage, ToolDefinition, ToolChatResult } from './agentTypes';
 
 const GROQ_BASE = 'https://api.groq.com/openai/v1';
@@ -21,12 +32,12 @@ export const GROQ_MODELS = {
   completion: 'openai/gpt-oss-20b',  // low-latency, suited to inline ghost-text completion
 } as const;
 
-// Models selectable for chat/assistant use in the UI. Both are free-tier
-// Groq models well suited to a code assistant: 120B for harder reasoning/
-// refactors, 20B when speed matters more than depth.
+// Models selectable for chat/assistant use in the UI — all free-tier,
+// open-weight Groq models suited to a code assistant.
 export const GROQ_CHAT_MODEL_OPTIONS: { id: string; label: string }[] = [
   { id: 'openai/gpt-oss-120b', label: 'GPT-OSS 120B (best quality)' },
   { id: 'openai/gpt-oss-20b', label: 'GPT-OSS 20B (fastest)' },
+  { id: 'qwen/qwen3.8-27b', label: 'Qwen3.8 27B (agentic coding, 131K context)' },
 ];
 
 export type GroqChatMessage = {
