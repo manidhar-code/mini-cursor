@@ -1,34 +1,26 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { buildPreviewDoc } from '../sandbox/buildPreviewDoc';
 import type { OpenFile } from '../../types';
 
 const DEBOUNCE_MS = 400;
 
 export function PreviewPane({ openFiles, activeFilePath }: { openFiles: OpenFile[]; activeFilePath: string | null }) {
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const doc = buildPreviewDoc(openFiles, activeFilePath);
+  const [committedDoc, setCommittedDoc] = useState(doc);
+  const [refreshKey, setRefreshKey] = useState(0);
 
-  // Debounced live-update: re-write the iframe's document as HTML/CSS/JS
-  // files change, without re-mounting the iframe on every keystroke.
+  // Debounced live-update. Note this sets the iframe's `srcDoc` attribute
+  // rather than reaching into `iframe.contentWindow.document` and calling
+  // .write() — a sandboxed iframe with no `allow-same-origin` (which this
+  // deliberately is, so preview code can't reach the parent page) is
+  // treated by the browser as cross-origin for JS property access, so
+  // `contentWindow.document` throws a SecurityError and silently leaves the
+  // iframe blank. `srcDoc` is a plain HTML attribute, not a script call
+  // across that boundary, so it works with full sandboxing intact.
   useEffect(() => {
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => {
-      const iframe = iframeRef.current;
-      if (!iframe || doc === null) return;
-      const win = iframe.contentWindow;
-      if (!win) return;
-      win.document.open();
-      win.document.write(doc);
-      win.document.close();
-    }, DEBOUNCE_MS);
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [doc, refreshKey]);
+    const t = setTimeout(() => setCommittedDoc(doc), DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [doc]);
 
   if (doc === null) {
     return (
@@ -46,10 +38,11 @@ export function PreviewPane({ openFiles, activeFilePath }: { openFiles: OpenFile
         <span className="panel-toolbar-hint">Live preview — updates automatically as you type</span>
       </div>
       <iframe
-        ref={iframeRef}
+        key={refreshKey}
         className="preview-frame"
         title="Preview"
         sandbox="allow-scripts allow-forms allow-modals allow-popups"
+        srcDoc={committedDoc ?? ''}
       />
     </div>
   );
