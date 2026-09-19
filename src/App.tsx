@@ -5,12 +5,14 @@ import { useChat, INLINE_EDIT_SYSTEM_PROMPT } from './hooks/useChat';
 import { useAgent } from './hooks/useAgent';
 import { useRunner } from './hooks/useRunner';
 import { detectLanguage, extensionForLanguage } from './lib/utils/language';
-import { chat } from './lib/api';
+import { chatWithFallback, type ProviderModel, type ApiKeys } from './lib/api';
 import { stripCodeFence } from './lib/markdown/parse';
 import { MessageContent } from './lib/markdown/MessageContent';
 import { registerInlineCompletionProvider } from './lib/editor/inlineCompletion';
 import { GROQ_CHAT_MODEL_OPTIONS } from './lib/api/groq';
 import { MISTRAL_CHAT_MODEL_OPTIONS } from './lib/api/mistral';
+import { OPENROUTER_CHAT_MODEL_OPTIONS } from './lib/api/openrouter';
+import { GEMINI_CHAT_MODEL_OPTIONS } from './lib/api/gemini';
 import { applyPendingChanges } from './lib/agent/apply';
 import { diffLines } from './lib/agent/diff';
 import { PreviewPane } from './lib/panels/PreviewPane';
@@ -20,6 +22,49 @@ import type { AgentActivityEvent, PendingFileChange } from './lib/agent/types';
 import type { OpenFile, ProviderKey, AiMode } from './types';
 
 type BottomPanelTab = 'preview' | 'terminal' | 'output' | null;
+
+// Unified model picker — one flat list spanning every provider, in the
+// exact order requested: the two GPT-OSS sizes, Qwen, Codestral, then the
+// two "don't know/don't care which exact model answers" catch-alls.
+// Picking an entry sets both the provider AND that provider's model in one
+// action, replacing the old two-step "pick provider, then pick its model"
+// UI.
+type UnifiedModelOption = { provider: ProviderKey; model: string; label: string };
+const ALL_PROVIDER_MODELS: UnifiedModelOption[] = [
+  ...GROQ_CHAT_MODEL_OPTIONS.map((o) => ({ provider: 'groq' as const, model: o.id, label: o.label })),
+  ...MISTRAL_CHAT_MODEL_OPTIONS.map((o) => ({ provider: 'mistral' as const, model: o.id, label: o.label })),
+  ...OPENROUTER_CHAT_MODEL_OPTIONS.map((o) => ({ provider: 'openrouter' as const, model: o.id, label: o.label })),
+  ...GEMINI_CHAT_MODEL_OPTIONS.map((o) => ({ provider: 'gemini' as const, model: o.id, label: o.label })),
+];
+const MODEL_ORDER = [
+  'openai/gpt-oss-20b', 'openai/gpt-oss-120b', 'qwen/qwen3.8-27b',
+  'codestral-latest', 'openrouter/free', 'gemini-3.5-flash-lite',
+];
+const UNIFIED_MODEL_OPTIONS: UnifiedModelOption[] = MODEL_ORDER
+  .map((id) => ALL_PROVIDER_MODELS.find((m) => m.model === id))
+  .filter((m): m is UnifiedModelOption => Boolean(m));
+
+function unifiedModelKey(provider: ProviderKey, model: string): string {
+  return provider + ':' + model;
+}
+
+function primaryModelFor(settings: { preferredProvider: ProviderKey; groqModel: string; mistralModel: string; openrouterModel: string; geminiModel: string }): ProviderModel {
+  switch (settings.preferredProvider) {
+    case 'groq': return { provider: 'groq', model: settings.groqModel };
+    case 'mistral': return { provider: 'mistral', model: settings.mistralModel };
+    case 'openrouter': return { provider: 'openrouter', model: settings.openrouterModel };
+    case 'gemini': return { provider: 'gemini', model: settings.geminiModel };
+  }
+}
+
+function apiKeysFrom(settings: { groqApiKey: string; mistralApiKey: string; openrouterApiKey: string; geminiApiKey: string }): ApiKeys {
+  return {
+    groq: settings.groqApiKey,
+    mistral: settings.mistralApiKey,
+    openrouter: settings.openrouterApiKey,
+    gemini: settings.geminiApiKey,
+  };
+}
 
 /* ─── SVG Icons ────────────────────────────────────────────── */
 function SendIcon() {
@@ -52,13 +97,16 @@ function TrashIcon() {
 
 /* ─── Settings Panel ───────────────────────────────────────── */
 function SettingsPanel({
-  open, onClose, settings, onSetGroqKey, onSetMistralKey, onSetInlineCompletionsEnabled, onSetAgentRequireApproval,
+  open, onClose, settings, onSetGroqKey, onSetMistralKey, onSetOpenrouterKey, onSetGeminiKey,
+  onSetInlineCompletionsEnabled, onSetAgentRequireApproval,
 }: {
   open: boolean;
   onClose: () => void;
   settings: ReturnType<typeof useSettings>['settings'];
   onSetGroqKey: (k: string) => void;
   onSetMistralKey: (k: string) => void;
+  onSetOpenrouterKey: (k: string) => void;
+  onSetGeminiKey: (k: string) => void;
   onSetInlineCompletionsEnabled: (enabled: boolean) => void;
   onSetAgentRequireApproval: (required: boolean) => void;
 }) {
@@ -77,7 +125,19 @@ function SettingsPanel({
           <label>Mistral API Key</label>
           <input className="settings-input" type="password" placeholder="..."
             value={settings.mistralApiKey} onChange={(e) => onSetMistralKey(e.target.value)} />
-          <p className="settings-hint">Get a key at console.mistral.ai (Codestral for code completion)</p>
+          <p className="settings-hint">Get a key at console.mistral.ai — used for Codestral only</p>
+        </div>
+        <div className="settings-group">
+          <label>OpenRouter API Key</label>
+          <input className="settings-input" type="password" placeholder="sk-or-..."
+            value={settings.openrouterApiKey} onChange={(e) => onSetOpenrouterKey(e.target.value)} />
+          <p className="settings-hint">Get a free key at openrouter.ai — always routed through their free-model router, never a paid model</p>
+        </div>
+        <div className="settings-group">
+          <label>Gemini API Key</label>
+          <input className="settings-input" type="password" placeholder="AIza..."
+            value={settings.geminiApiKey} onChange={(e) => onSetGeminiKey(e.target.value)} />
+          <p className="settings-hint">Get a free key at aistudio.google.com — used for Gemini 3.5 Flash-Lite</p>
         </div>
         <div className="settings-group settings-checkbox-group">
           <label className="settings-checkbox-label">
@@ -96,6 +156,12 @@ function SettingsPanel({
           <p className="settings-hint">
             Recommended. When on, Agent stages every file change for you to review before anything is written.
             Deletions and renames always require approval regardless of this setting.
+          </p>
+        </div>
+        <div className="settings-group">
+          <p className="settings-hint">
+            If your selected model is rate-limited or its servers are busy, requests automatically fall back to
+            another model that has a key configured — you'll see which one actually replied under its response.
           </p>
         </div>
         <div style={{ marginTop: 20, textAlign: 'right' }}>
@@ -269,8 +335,9 @@ function AgentDiffModal({
 /* ─── Main App ─────────────────────────────────────────────── */
 export default function App() {
   const {
-    settings, setGroqKey, setMistralKey, setProvider,
-    setGroqModel, setMistralModel, setInlineCompletionsEnabled, setAgentRequireApproval, hasKeys,
+    settings, setGroqKey, setMistralKey, setOpenrouterKey, setGeminiKey, setProvider,
+    setGroqModel, setMistralModel, setOpenrouterModel, setGeminiModel,
+    setInlineCompletionsEnabled, setAgentRequireApproval, hasKeys,
   } = useSettings();
   const { messages, isStreaming, error, sendMessage, clearChat } = useChat(settings);
 
@@ -279,6 +346,15 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aiMode, setAiMode] = useState<AiMode>('ask');
+
+  // Resizable layout — editor-pane vs chat-pane (horizontal split) and
+  // editor-area vs bottom-panel (vertical split). Plain pixel sizes in
+  // state, dragged via the two resizer bars below.
+  const [chatPaneWidth, setChatPaneWidth] = useState(380);
+  const [bottomPanelHeight, setBottomPanelHeight] = useState(260);
+  const appShellRef = useRef<HTMLDivElement>(null);
+  const editorPaneRef = useRef<HTMLDivElement>(null);
+  const resizingRef = useRef<'chat' | 'bottom' | null>(null);
 
   // Ctrl/Cmd+K inline-edit state
   const [aiEditOpen, setAiEditOpen] = useState(false);
@@ -303,7 +379,7 @@ export default function App() {
   // the user could edit files in the meantime.
   const openFilesRef = useRef(openFiles);
   useEffect(() => { openFilesRef.current = openFiles; }, [openFiles]);
-  const { isRunning: agentRunning, turn: agentTurn, run: runAgentTurn, markApplied: markAgentApplied, markRejected: markAgentRejected } =
+  const { isRunning: agentRunning, turn: agentTurn, run: runAgentTurn, markApplied: markAgentApplied, markRejected: markAgentRejected, dismiss: dismissAgentTurn } =
     useAgent(settings, () => openFilesRef.current);
   const [agentDiffOpen, setAgentDiffOpen] = useState(false);
 
@@ -502,27 +578,22 @@ export default function App() {
   const submitAiEdit = useCallback(async () => {
     if (!currentFile || !activeFile || !aiEditInstruction.trim() || !aiEditRangeRef.current) return;
     const { start, end, original } = aiEditRangeRef.current;
-    const provider = settings.preferredProvider;
-    const model = provider === 'groq' ? settings.groqModel : settings.mistralModel;
+    const primary = primaryModelFor(settings);
+    const keys = apiKeysFrom(settings);
 
     setAiEditLoading(true);
     setAiEditError(null);
     try {
-      const result = await chat(
-        provider,
-        { groq: settings.groqApiKey, mistral: settings.mistralApiKey },
-        model,
-        [
-          { role: 'system', content: INLINE_EDIT_SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content:
-              'File: ' + currentFile.name + '\nLanguage: ' + currentFile.language +
-              '\n\nSelected code:\n```' + currentFile.language + '\n' + original + '\n```' +
-              '\n\nInstruction: ' + aiEditInstruction,
-          },
-        ],
-      );
+      const { text: result } = await chatWithFallback(primary, keys, [
+        { role: 'system', content: INLINE_EDIT_SYSTEM_PROMPT },
+        {
+          role: 'user',
+          content:
+            'File: ' + currentFile.name + '\nLanguage: ' + currentFile.language +
+            '\n\nSelected code:\n```' + currentFile.language + '\n' + original + '\n```' +
+            '\n\nInstruction: ' + aiEditInstruction,
+        },
+      ]);
       const cleaned = stripCodeFence(result);
       const targetPath = activeFile;
       setOpenFiles((prev) =>
@@ -540,6 +611,14 @@ export default function App() {
   }, [currentFile, activeFile, aiEditInstruction, settings]);
 
   /* ── Chat / Ask / Edit / Agent dispatch ──────────────────────── */
+
+  // Clearing the chat should also dismiss any Agent turn card — previously
+  // the trash button only cleared `messages`, so an Agent conversation
+  // (which lives in separate `agentTurn` state) stayed on screen forever.
+  const handleClearChat = useCallback(() => {
+    clearChat();
+    dismissAgentTurn();
+  }, [clearChat, dismissAgentTurn]);
 
   const handleRunAgent = useCallback((instruction: string) => {
     runAgentTurn(instruction).then((outcome) => {
@@ -606,19 +685,66 @@ export default function App() {
   const tabClassName = (file: OpenFile) =>
     'tab' + (activeFile === file.path ? ' active' : '');
 
-  const providerBtnClass = (p: ProviderKey) =>
-    'provider-btn' + (settings.preferredProvider === p ? ' active' : '');
+  // Single flat model picker spanning all 4 providers, replacing the old
+  // provider-toggle + per-provider dropdown combo. Selecting an entry sets
+  // both the provider and that provider's model field in one action.
+  const selectedUnifiedKey = unifiedModelKey(settings.preferredProvider,
+    settings.preferredProvider === 'groq' ? settings.groqModel
+      : settings.preferredProvider === 'mistral' ? settings.mistralModel
+      : settings.preferredProvider === 'openrouter' ? settings.openrouterModel
+      : settings.geminiModel);
 
-  const currentModelOptions = settings.preferredProvider === 'groq'
-    ? GROQ_CHAT_MODEL_OPTIONS
-    : MISTRAL_CHAT_MODEL_OPTIONS;
-  const currentModel = settings.preferredProvider === 'groq' ? settings.groqModel : settings.mistralModel;
-  const setCurrentModel = settings.preferredProvider === 'groq' ? setGroqModel : setMistralModel;
+  const handleUnifiedModelChange = useCallback((key: string) => {
+    const [provider, model] = key.split(':') as [ProviderKey, string];
+    setProvider(provider);
+    if (provider === 'groq') setGroqModel(model);
+    else if (provider === 'mistral') setMistralModel(model);
+    else if (provider === 'openrouter') setOpenrouterModel(model);
+    else setGeminiModel(model);
+  }, [setProvider, setGroqModel, setMistralModel, setOpenrouterModel, setGeminiModel]);
+
+  /* ── Resizable panels ────────────────────────────────────────── */
+
+  const startResize = useCallback((which: 'chat' | 'bottom') => (e: React.MouseEvent) => {
+    e.preventDefault();
+    resizingRef.current = which;
+    document.body.style.cursor = which === 'chat' ? 'col-resize' : 'row-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  useEffect(() => {
+    const handleMove = (e: MouseEvent) => {
+      const which = resizingRef.current;
+      if (!which) return;
+      if (which === 'chat' && appShellRef.current) {
+        const shellRight = appShellRef.current.getBoundingClientRect().right;
+        const next = Math.min(560, Math.max(280, shellRight - e.clientX));
+        setChatPaneWidth(next);
+      } else if (which === 'bottom' && editorPaneRef.current) {
+        const paneRect = editorPaneRef.current.getBoundingClientRect();
+        const next = Math.min(paneRect.height - 120, Math.max(120, paneRect.bottom - e.clientY));
+        setBottomPanelHeight(next);
+      }
+    };
+    const handleUp = () => {
+      if (resizingRef.current) {
+        resizingRef.current = null;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, []);
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" ref={appShellRef}>
       {/* Editor Pane */}
-      <div className="editor-pane">
+      <div className="editor-pane" ref={editorPaneRef}>
         <div className="tab-bar">
           {openFiles.map((file) => (
             <button key={file.path} className={tabClassName(file)}
@@ -722,43 +848,48 @@ export default function App() {
         </div>
 
         {bottomPanelTab && (
-          <div className="bottom-panel">
-            <div className="bottom-panel-header">
-              <div className="bottom-panel-tabs">
-                <button className={'bottom-panel-tab' + (bottomPanelTab === 'preview' ? ' active' : '')}
-                  onClick={() => setBottomPanelTab('preview')}>Preview</button>
-                <button className={'bottom-panel-tab' + (bottomPanelTab === 'terminal' ? ' active' : '')}
-                  onClick={() => setBottomPanelTab('terminal')}>Terminal</button>
-                <button className={'bottom-panel-tab' + (bottomPanelTab === 'output' ? ' active' : '')}
-                  onClick={() => setBottomPanelTab('output')}>Output</button>
+          <>
+            <div className="resizer resizer-horizontal" onMouseDown={startResize('bottom')} title="Drag to resize" />
+            <div className="bottom-panel" style={{ height: bottomPanelHeight }}>
+              <div className="bottom-panel-header">
+                <div className="bottom-panel-tabs">
+                  <button className={'bottom-panel-tab' + (bottomPanelTab === 'preview' ? ' active' : '')}
+                    onClick={() => setBottomPanelTab('preview')}>Preview</button>
+                  <button className={'bottom-panel-tab' + (bottomPanelTab === 'terminal' ? ' active' : '')}
+                    onClick={() => setBottomPanelTab('terminal')}>Terminal</button>
+                  <button className={'bottom-panel-tab' + (bottomPanelTab === 'output' ? ' active' : '')}
+                    onClick={() => setBottomPanelTab('output')}>Output</button>
+                </div>
+                <button className="icon-btn" title="Close panel" onClick={() => setBottomPanelTab(null)}>✕</button>
               </div>
-              <button className="icon-btn" title="Close panel" onClick={() => setBottomPanelTab(null)}>✕</button>
+              <div className="bottom-panel-body">
+                {bottomPanelTab === 'preview' && (
+                  <PreviewPane openFiles={openFiles} activeFilePath={activeFile} />
+                )}
+                {bottomPanelTab === 'terminal' && (
+                  <TerminalPane
+                    history={runner.history}
+                    running={runner.running}
+                    onRun={runCurrentFile}
+                    onClear={runner.clear}
+                    currentFile={currentFile}
+                  />
+                )}
+                {bottomPanelTab === 'output' && <OutputPane latest={runner.latest} />}
+              </div>
             </div>
-            <div className="bottom-panel-body">
-              {bottomPanelTab === 'preview' && (
-                <PreviewPane openFiles={openFiles} activeFilePath={activeFile} />
-              )}
-              {bottomPanelTab === 'terminal' && (
-                <TerminalPane
-                  history={runner.history}
-                  running={runner.running}
-                  onRun={runCurrentFile}
-                  onClear={runner.clear}
-                  currentFile={currentFile}
-                />
-              )}
-              {bottomPanelTab === 'output' && <OutputPane latest={runner.latest} />}
-            </div>
-          </div>
+          </>
         )}
       </div>
 
+      <div className="resizer resizer-vertical" onMouseDown={startResize('chat')} title="Drag to resize" />
+
       {/* Chat Pane */}
-      <div className="chat-pane">
+      <div className="chat-pane" style={{ width: chatPaneWidth, flex: '0 0 auto' }}>
         <div className="chat-header">
           <h3>💬 AI Assistant</h3>
           <div className="chat-header-actions">
-            <button className="icon-btn" onClick={clearChat} title="Clear chat">
+            <button className="icon-btn" onClick={handleClearChat} title="Clear chat">
               <TrashIcon />
             </button>
             <button className="icon-btn" onClick={() => setSettingsOpen(true)} title="Settings">
@@ -893,7 +1024,7 @@ export default function App() {
             <textarea
               ref={textareaRef}
               className="composer-input"
-              rows={1}
+              rows={3}
               value={chatInput}
               onChange={(e) => setChatInput(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -933,22 +1064,16 @@ export default function App() {
             <div className="composer-footer-right">
               <select
                 className="model-select"
-                value={currentModel}
-                onChange={(e) => setCurrentModel(e.target.value)}
-                title="Model used for chat"
+                value={selectedUnifiedKey}
+                onChange={(e) => handleUnifiedModelChange(e.target.value)}
+                title="Model used for chat (auto-falls back to another if this one is rate-limited or busy)"
               >
-                {currentModelOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id}>{opt.label}</option>
+                {UNIFIED_MODEL_OPTIONS.map((opt) => (
+                  <option key={unifiedModelKey(opt.provider, opt.model)} value={unifiedModelKey(opt.provider, opt.model)}>
+                    {opt.label}
+                  </option>
                 ))}
               </select>
-              <div className="provider-toggle">
-                {(['groq', 'mistral'] as ProviderKey[]).map((p) => (
-                  <button key={p} className={providerBtnClass(p)}
-                    onClick={() => setProvider(p)}>
-                    {p === 'groq' ? '⚡ Groq' : '🔷 Mistral'}
-                  </button>
-                ))}
-              </div>
             </div>
           </div>
         </div>
@@ -960,6 +1085,8 @@ export default function App() {
         settings={settings}
         onSetGroqKey={setGroqKey}
         onSetMistralKey={setMistralKey}
+        onSetOpenrouterKey={setOpenrouterKey}
+        onSetGeminiKey={setGeminiKey}
         onSetInlineCompletionsEnabled={setInlineCompletionsEnabled}
         onSetAgentRequireApproval={setAgentRequireApproval}
       />

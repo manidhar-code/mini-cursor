@@ -16,6 +16,10 @@
   --red: #f38ba8;
   --yellow: #f9e2af;
   --border: #45475a;
+  --gold: #ffd700;
+  --gold-hover: #ffc700;
+  --gold-text: #1e1e2e;
+  --golden-cursor: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCIgdmlld0JveD0iMCAwIDI0IDI0IiBzaGFwZS1yZW5kZXJpbmc9ImNyaXNwRWRnZXMiPgogIDxwb2x5Z29uIHBvaW50cz0iMiwxIDIsMTggNSwxNSA2LDE1IDksMjEgMTIsMjAgOSwxNCAxNywxNCAyLDEiIGZpbGw9IiNGRkQ3MDAiIHN0cm9rZT0iIzVjNGEwMCIgc3Ryb2tlLXdpZHRoPSIxLjUiIHN0cm9rZS1saW5lam9pbj0icm91bmQiLz4KPC9zdmc+Cg==") 2 1;
   --radius: 6px;
   --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -29,6 +33,13 @@ html, body, #root {
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 14px;
+  /* Golden pixel-art cursor — a blocky (crisp-edged, non-anti-aliased)
+     gold arrow, applied app-wide. Text inputs/textareas/the Monaco editor
+     keep their own text-beam cursor regardless — browsers resolve
+     `cursor: auto` on editable content to a text caret rather than
+     inheriting this. The "2 1" after the url is the click hotspot (the
+     arrow's tip), matching the polygon's top-left point in the SVG. */
+  cursor: var(--golden-cursor), auto;
 }
 
 /* Layout */
@@ -40,9 +51,16 @@ html, body, #root {
 }
 
 .chat-pane {
-  width: 420px; display: flex; flex-direction: column;
-  background: var(--bg-secondary); min-width: 320px; max-width: 600px;
+  display: flex; flex-direction: column;
+  background: var(--bg-secondary); min-width: 280px; max-width: 560px;
 }
+
+/* Resizer bars — draggable dividers between panes (Agent Mode item 4:
+   "adjusting bars" between the editor/chat panes and editor/bottom-panel). */
+.resizer { flex: 0 0 auto; background: var(--border); position: relative; z-index: 5; }
+.resizer:hover, .resizer:active { background: var(--accent); }
+.resizer-vertical { width: 4px; cursor: col-resize; }
+.resizer-horizontal { height: 4px; cursor: row-resize; }
 
 /* Tab Bar */
 .tab-bar {
@@ -56,7 +74,7 @@ html, body, #root {
   display: flex; align-items: center; gap: 6px; padding: 0 14px;
   background: transparent; border: none; border-right: 1px solid var(--border);
   color: var(--text-muted); font-size: 12px; font-family: var(--font-sans);
-  cursor: pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
+  cursor: var(--golden-cursor), pointer; white-space: nowrap; transition: background 0.15s, color 0.15s;
 }
 .tab:hover { background: var(--bg-surface); color: var(--text-secondary); }
 .tab.active {
@@ -69,7 +87,7 @@ html, body, #root {
   display: flex; align-items: center; justify-content: center;
   width: 18px; height: 18px; border: none; border-radius: 3px;
   background: transparent; color: var(--text-muted);
-  cursor: pointer; font-size: 14px; line-height: 1;
+  cursor: var(--golden-cursor), pointer; font-size: 14px; line-height: 1;
 }
 .tab-close:hover { background: var(--bg-hover); color: var(--red); }
 
@@ -104,7 +122,7 @@ html, body, #root {
   display: flex; align-items: center; justify-content: center;
   width: 28px; height: 28px; border: none; border-radius: var(--radius);
   background: transparent; color: var(--text-muted);
-  cursor: pointer; transition: background 0.15s, color 0.15s;
+  cursor: var(--golden-cursor), pointer; transition: background 0.15s, color 0.15s;
 }
 .icon-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 
@@ -172,7 +190,7 @@ html, body, #root {
 .code-block-btn {
   display: flex; align-items: center; gap: 4px; padding: 3px 8px;
   background: transparent; border: 1px solid var(--border); border-radius: 4px;
-  color: var(--text-secondary); font-size: 11px; cursor: pointer;
+  color: var(--text-secondary); font-size: 11px; cursor: var(--golden-cursor), pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
 .code-block-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
@@ -221,18 +239,18 @@ html, body, #root {
 
 .composer-input {
   flex: 1; background: transparent; border: none; color: var(--text-primary);
-  font-family: var(--font-sans); font-size: 13px; line-height: 1.5;
-  padding: 6px 10px; resize: none; outline: none; min-height: 36px; max-height: 150px;
+  font-family: var(--font-sans); font-size: 14px; line-height: 1.6;
+  padding: 10px 12px; resize: none; outline: none; min-height: 64px; max-height: 240px;
 }
 .composer-input::placeholder { color: var(--text-muted); }
 
 .composer-send {
   display: flex; align-items: center; justify-content: center;
   width: 32px; height: 32px; border: none; border-radius: 6px;
-  background: var(--accent); color: var(--bg-primary); cursor: pointer;
+  background: var(--gold); color: var(--gold-text); cursor: var(--golden-cursor), pointer;
   flex-shrink: 0; transition: background 0.15s, opacity 0.15s;
 }
-.composer-send:hover { background: var(--accent-hover); }
+.composer-send:hover { background: var(--gold-hover); }
 .composer-send:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .composer-footer {
@@ -246,7 +264,7 @@ html, body, #root {
 
 .ai-edit-trigger {
   border: 1px solid var(--border); background: transparent; color: var(--text-muted);
-  border-radius: 4px; padding: 2px 6px; font-size: 10px; cursor: pointer;
+  border-radius: 4px; padding: 2px 6px; font-size: 10px; cursor: var(--golden-cursor), pointer;
   transition: all 0.15s; white-space: nowrap;
 }
 .ai-edit-trigger:hover { border-color: var(--accent); color: var(--accent); }
@@ -254,14 +272,14 @@ html, body, #root {
 .model-select {
   background: var(--bg-surface); border: 1px solid var(--border); border-radius: 4px;
   color: var(--text-secondary); font-size: 11px; padding: 2px 4px; max-width: 150px;
-  cursor: pointer;
+  cursor: var(--golden-cursor), pointer;
 }
 
 .provider-toggle { display: flex; gap: 4px; }
 .provider-btn {
   padding: 2px 8px; border: 1px solid var(--border); border-radius: 4px;
   background: transparent; color: var(--text-muted); font-size: 11px;
-  cursor: pointer; transition: all 0.15s;
+  cursor: var(--golden-cursor), pointer; transition: all 0.15s;
 }
 .provider-btn:hover { border-color: var(--text-muted); }
 .provider-btn.active {
@@ -299,9 +317,9 @@ html, body, #root {
 .settings-checkbox-group { margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
 .settings-checkbox-label {
   display: flex; align-items: center; gap: 8px; font-size: 13px;
-  color: var(--text-primary); cursor: pointer; font-weight: 500;
+  color: var(--text-primary); cursor: var(--golden-cursor), pointer; font-weight: 500;
 }
-.settings-checkbox-label input { width: 15px; height: 15px; cursor: pointer; }
+.settings-checkbox-label input { width: 15px; height: 15px; cursor: var(--golden-cursor), pointer; }
 
 /* AI Edit (Ctrl/Cmd+K) modal */
 .ai-edit-panel {
@@ -324,7 +342,7 @@ html, body, #root {
 .settings-btn {
   padding: 8px 16px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--bg-surface); color: var(--text-primary); font-size: 13px;
-  cursor: pointer; transition: background 0.15s;
+  cursor: var(--golden-cursor), pointer; transition: background 0.15s;
 }
 .settings-btn:hover { background: var(--bg-hover); }
 .settings-btn.primary {
@@ -371,7 +389,7 @@ html, body, #root {
 .ai-mode-btn {
   flex: 1; padding: 5px 8px; border: 1px solid var(--border); border-radius: var(--radius);
   background: var(--bg-surface); color: var(--text-muted); font-size: 12px; font-weight: 500;
-  cursor: pointer; transition: all 0.15s;
+  cursor: var(--golden-cursor), pointer; transition: all 0.15s;
 }
 .ai-mode-btn:hover { border-color: var(--text-muted); color: var(--text-secondary); }
 .ai-mode-btn.active {
@@ -466,13 +484,13 @@ html, body, #root {
 .panel-toggle-group { display: flex; gap: 2px; align-items: center; padding-right: 6px; }
 .panel-toggle-btn {
   padding: 0 10px; height: 100%; border: none; background: transparent; color: var(--text-muted);
-  font-size: 11.5px; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s;
+  font-size: 11.5px; cursor: var(--golden-cursor), pointer; white-space: nowrap; transition: background .15s, color .15s;
 }
 .panel-toggle-btn:hover { background: var(--bg-surface); color: var(--text-secondary); }
 .panel-toggle-btn.active { color: var(--accent); background: var(--bg-surface); }
 
 .bottom-panel {
-  height: 280px; min-height: 120px; max-height: 70vh; resize: vertical; overflow: hidden;
+  min-height: 120px; max-height: 70vh; overflow: hidden;
   display: flex; flex-direction: column; border-top: 1px solid var(--border); background: var(--bg-secondary);
 }
 .bottom-panel-header {
@@ -482,7 +500,7 @@ html, body, #root {
 .bottom-panel-tabs { display: flex; }
 .bottom-panel-tab {
   padding: 8px 14px; background: transparent; border: none; color: var(--text-muted);
-  font-size: 12px; cursor: pointer; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s;
+  font-size: 12px; cursor: var(--golden-cursor), pointer; border-bottom: 2px solid transparent; transition: color .15s, border-color .15s;
 }
 .bottom-panel-tab:hover { color: var(--text-secondary); }
 .bottom-panel-tab.active { color: var(--text-primary); border-bottom-color: var(--accent); }

@@ -1,41 +1,25 @@
-// Mistral API Client — Codestral for completions, Large for complex tasks
+// Mistral API Client — Codestral only.
 //
-// Model choice: all three models below are reachable at $0 on Mistral's
-// free "Experiment" plan on La Plateforme (console.mistral.ai) — a
-// rate-limited tier (no per-token billing) that requires opting into
-// data-training use and phone verification, rather than a paid plan.
-// Unlike Groq, Mistral doesn't put every model behind the same free door —
-// so if this key isn't on the Experiment plan, calls to any of these will
-// 401/429 with a billing error, not silently downgrade. Worth surfacing
-// that in Settings if users report failures.
-//
-// Fit for a mini-cursor style code editor:
-//   - completion (codestral-latest): Mistral's dedicated fill-in-the-middle
-//     code model — the right tool for ghost-text/inline completion, not a
-//     general chat model pressed into service.
-//   - codeChat (mistral-medium-latest): balanced cost/quality, good default
-//     for everyday "explain/fix this code" chat.
-//   - chat (mistral-large-latest): strongest reasoning, best for harder
-//     multi-file refactors or architecture questions — heavier on the
-//     shared free-tier rate limit, so it's the "when it matters" option
-//     rather than the default for quick exchanges.
+// By request, Mistral Large and Mistral Medium have been dropped from this
+// app entirely — Codestral (the FIM-specialized code model) is now the only
+// Mistral model used, for chat, code-chat, AND completion. It's still
+// reachable at $0 on Mistral's free "Experiment" plan on La Plateforme
+// (console.mistral.ai) — a rate-limited tier (no per-token billing) that
+// requires opting into data-training use and phone verification, rather
+// than a paid plan.
 import type { AgentMessage, ToolDefinition, ToolChatResult } from './agentTypes';
 export type { ToolDefinition, ToolCall, AgentMessage } from './agentTypes';
 
 const MISTRAL_BASE = 'https://api.mistral.ai/v1';
 
 export const MISTRAL_MODELS = {
-  chat: 'mistral-large-latest',
-  codeChat: 'mistral-medium-latest',
+  chat: 'codestral-latest',
+  codeChat: 'codestral-latest',
   completion: 'codestral-latest',
 } as const;
 
-// Models selectable for chat/assistant use in the UI. Codestral is included
-// here (not just for ghost-text completion) since it's a strong pick for
-// code-focused conversations.
+// Only one Mistral model is offered anywhere in the UI now.
 export const MISTRAL_CHAT_MODEL_OPTIONS: { id: string; label: string }[] = [
-  { id: 'mistral-large-latest', label: 'Mistral Large (best reasoning)' },
-  { id: 'mistral-medium-latest', label: 'Mistral Medium (balanced)' },
   { id: 'codestral-latest', label: 'Codestral (code specialist)' },
 ];
 

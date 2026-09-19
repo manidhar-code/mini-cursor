@@ -25,7 +25,7 @@ export type ChatMessage = {
   isStreaming?: boolean;
 };
 
-export type ProviderKey = 'groq' | 'mistral';
+export type ProviderKey = 'groq' | 'mistral' | 'openrouter' | 'gemini';
 
 export type ModelOption = {
   id: string;
@@ -35,9 +35,13 @@ export type ModelOption = {
 export type ProviderSettings = {
   groqApiKey: string;
   mistralApiKey: string;
+  openrouterApiKey: string;
+  geminiApiKey: string;
   preferredProvider: ProviderKey;
   groqModel: string;
   mistralModel: string;
+  openrouterModel: string;
+  geminiModel: string;
   inlineCompletionsEnabled: boolean;
   agentRequireApproval: boolean;
 };

@@ -17,6 +17,14 @@ export function useSettings() {
     setSettings((s) => ({ ...s, mistralApiKey: key }));
   }, []);
 
+  const setOpenrouterKey = useCallback((key: string) => {
+    setSettings((s) => ({ ...s, openrouterApiKey: key }));
+  }, []);
+
+  const setGeminiKey = useCallback((key: string) => {
+    setSettings((s) => ({ ...s, geminiApiKey: key }));
+  }, []);
+
   const setProvider = useCallback((provider: ProviderKey) => {
     setSettings((s) => ({ ...s, preferredProvider: provider }));
   }, []);
@@ -29,6 +37,14 @@ export function useSettings() {
     setSettings((s) => ({ ...s, mistralModel: model }));
   }, []);
 
+  const setOpenrouterModel = useCallback((model: string) => {
+    setSettings((s) => ({ ...s, openrouterModel: model }));
+  }, []);
+
+  const setGeminiModel = useCallback((model: string) => {
+    setSettings((s) => ({ ...s, geminiModel: model }));
+  }, []);
+
   const setInlineCompletionsEnabled = useCallback((enabled: boolean) => {
     setSettings((s) => ({ ...s, inlineCompletionsEnabled: enabled }));
   }, []);
@@ -37,15 +53,21 @@ export function useSettings() {
     setSettings((s) => ({ ...s, agentRequireApproval: required }));
   }, []);
 
-  const hasKeys = Boolean(settings.groqApiKey || settings.mistralApiKey);
+  const hasKeys = Boolean(
+    settings.groqApiKey || settings.mistralApiKey || settings.openrouterApiKey || settings.geminiApiKey,
+  );
 
   return {
     settings,
     setGroqKey,
     setMistralKey,
+    setOpenrouterKey,
+    setGeminiKey,
     setProvider,
     setGroqModel,
     setMistralModel,
+    setOpenrouterModel,
+    setGeminiModel,
     setInlineCompletionsEnabled,
     setAgentRequireApproval,
     hasKeys,

@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { streamChat, type ChatMessage as APIMessage } from '../lib/api';
+import { streamChatWithFallback, type ChatMessage as APIMessage, type ProviderModel } from '../lib/api';
 import type { ChatMessage, ProviderSettings } from '../types';
 
 const SYSTEM_PROMPT = `You are an expert coding assistant inside a code editor. You help with:
@@ -20,6 +20,15 @@ export const INLINE_EDIT_SYSTEM_PROMPT = `You are a code-editing engine embedded
 You will be given a file's language, a selected snippet of code, and an instruction.
 Rewrite the snippet to satisfy the instruction.
 Output ONLY the replacement code for that exact snippet — no explanations, no markdown code fences, no commentary before or after.`;
+
+function currentModelFor(settings: ProviderSettings): ProviderModel {
+  switch (settings.preferredProvider) {
+    case 'groq': return { provider: 'groq', model: settings.groqModel };
+    case 'mistral': return { provider: 'mistral', model: settings.mistralModel };
+    case 'openrouter': return { provider: 'openrouter', model: settings.openrouterModel };
+    case 'gemini': return { provider: 'gemini', model: settings.geminiModel };
+  }
+}
 
 export function useChat(settings: ProviderSettings) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -48,55 +57,62 @@ export function useChat(settings: ProviderSettings) {
       { role: 'user', content: fullMessage },
     ];
 
-    const model = settings.preferredProvider === 'groq' ? settings.groqModel : settings.mistralModel;
+    const primary = currentModelFor(settings);
+    const keys = {
+      groq: settings.groqApiKey,
+      mistral: settings.mistralApiKey,
+      openrouter: settings.openrouterApiKey,
+      gemini: settings.geminiApiKey,
+    };
 
     try {
-      await streamChat(
-        settings.preferredProvider,
-        { groq: settings.groqApiKey, mistral: settings.mistralApiKey },
-        model,
-        apiMessages,
-        {
-          onToken: (token) => {
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last && last.role === 'assistant') {
-                next[next.length - 1] = { ...last, content: last.content + token };
-              }
-              return next;
-            });
-          },
-          onDone: () => {
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last && last.role === 'assistant') {
-                next[next.length - 1] = {
-                  ...last,
-                  isStreaming: false,
-                  provider: settings.preferredProvider,
-                  model,
-                };
-              }
-              return next;
-            });
-            setIsStreaming(false);
-          },
-          onError: (err) => {
-            setError(err.message);
-            setMessages((prev) => {
-              const next = [...prev];
-              const last = next[next.length - 1];
-              if (last && last.role === 'assistant' && !last.content) {
-                next.pop();
-              }
-              return next;
-            });
-            setIsStreaming(false);
-          },
+      await streamChatWithFallback(primary, keys, apiMessages, {
+        onToken: (token) => {
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === 'assistant') {
+              next[next.length - 1] = { ...last, content: last.content + token };
+            }
+            return next;
+          });
         },
-      );
+        // Fired once we know which provider/model actually generated the
+        // reply — may differ from `primary` if a fallback kicked in.
+        onProvider: (servedBy) => {
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === 'assistant') {
+              next[next.length - 1] = { ...last, provider: servedBy.provider, model: servedBy.model };
+            }
+            return next;
+          });
+        },
+        onDone: () => {
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === 'assistant') {
+              next[next.length - 1] = { ...last, isStreaming: false };
+            }
+            return next;
+          });
+          setIsStreaming(false);
+        },
+        onError: (err) => {
+          setError(err.message);
+          setMessages((prev) => {
+            const next = [...prev];
+            const last = next[next.length - 1];
+            if (last && last.role === 'assistant' && !last.content) {
+              next.pop();
+            }
+            return next;
+          });
+          setIsStreaming(false);
+        },
+      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
       setIsStreaming(false);

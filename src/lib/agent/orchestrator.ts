@@ -1,5 +1,5 @@
 import type { OpenFile, ProviderSettings } from '../../types';
-import { chat, generateWithTools } from '../api';
+import { chatWithFallback, generateWithToolsFallback, type ApiKeys, type ProviderModel } from '../api';
 import type { AgentMessage } from '../api/agentTypes';
 import { AGENT_TOOLS, describeToolCall, validateToolArgs } from './tools';
 import { buildAgentSystemPrompt, buildPlanningPrompt } from './systemPrompt';
@@ -24,6 +24,15 @@ function safeParseJSON(raw: string): { ok: true; value: unknown } | { ok: false;
   }
 }
 
+function primaryModelFor(settings: ProviderSettings): ProviderModel {
+  switch (settings.preferredProvider) {
+    case 'groq': return { provider: 'groq', model: settings.groqModel };
+    case 'mistral': return { provider: 'mistral', model: settings.mistralModel };
+    case 'openrouter': return { provider: 'openrouter', model: settings.openrouterModel };
+    case 'gemini': return { provider: 'gemini', model: settings.geminiModel };
+  }
+}
+
 export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> {
   const { instruction, files, settings, onActivity } = params;
 
@@ -43,9 +52,13 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
     emit({ id, label: label ?? prior?.label ?? id, status: 'error', detail });
   };
 
-  const provider = settings.preferredProvider;
-  const model = provider === 'groq' ? settings.groqModel : settings.mistralModel;
-  const keys = { groq: settings.groqApiKey, mistral: settings.mistralApiKey };
+  const primary = primaryModelFor(settings);
+  const keys: ApiKeys = {
+    groq: settings.groqApiKey,
+    mistral: settings.mistralApiKey,
+    openrouter: settings.openrouterApiKey,
+    gemini: settings.geminiApiKey,
+  };
   const commandRunner = getCommandRunner();
 
   emit({ id: 'understand', label: 'Understanding request', status: 'active' });
@@ -68,7 +81,7 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
   emit({ id: 'plan', label: 'Planning approach', status: 'active' });
   try {
     const { system, user } = buildPlanningPrompt(instruction, initialPaths);
-    const planResponse = await chat(provider, keys, model, [
+    const { text: planResponse } = await chatWithFallback(primary, keys, [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ]);
@@ -104,7 +117,15 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
 
     let response;
     try {
-      response = await generateWithTools(provider, keys, model, conversation, AGENT_TOOLS);
+      response = await generateWithToolsFallback(primary, keys, conversation, AGENT_TOOLS);
+      if (response.servedBy.provider !== primary.provider || response.servedBy.model !== primary.model) {
+        emit({
+          id: stepId + '-fallback',
+          label: 'Switched to ' + response.servedBy.provider + ' / ' + response.servedBy.model,
+          status: 'info',
+          detail: primary.provider + ' was rate-limited or busy',
+        });
+      }
     } catch (err) {
       fail(stepId, 'Model call failed', err instanceof Error ? err.message : String(err));
       stoppedReason = 'error';
