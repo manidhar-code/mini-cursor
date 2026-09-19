@@ -1,0 +1,19 @@
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[functions]
+  directory = "netlify/functions"
+
+# Friendly alias so the frontend can call /api/run-code instead of the
+# longer /.netlify/functions/run-code path. Must come before the SPA
+# catch-all below — Netlify uses the first matching redirect.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/:splat"
+  status = 200
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
