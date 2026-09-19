@@ -8,9 +8,9 @@
 //
 // The compiler list Wandbox hosts changes over time, so rather than
 // hardcoding compiler version strings (which would silently go stale),
-// this fetches Wandbox's live compiler list on each call and picks a
-// matching one for the requested language, preferring a "head" (latest)
-// build when one exists.
+// this fetches Wandbox's live compiler list on each call, picks a matching
+// stable build for the requested language, and automatically retries a
+// different build if the first one's container fails to launch.
 import { fetchJsonWithTimeout, postJsonWithTimeout, corsHeaders } from './lib/http.js';
 
 const TIMEOUT_MS = 9000;
@@ -86,17 +86,43 @@ async function runWandbox(canonicalLang, code, stdin) {
   const candidates = list.filter((c) => wantedNames.includes((c.language || '').toLowerCase()));
   if (!candidates.length) throw new Error(`Wandbox doesn't currently host a compiler for "${canonicalLang}".`);
 
-  const chosen = candidates.find((c) => /head/i.test(c.name)) || candidates[0];
+  // Stable (non-"head") builds first — Wandbox's "head" entries track
+  // nightly/tip-of-tree toolchains and occasionally fail to even launch
+  // their container ("catatonit: failed to exec pid1"), independent of
+  // anything wrong with the submitted code. Trying stable builds first,
+  // then falling back through the rest of the list, works around that
+  // without needing to hardcode any specific version string.
+  const ordered = [
+    ...candidates.filter((c) => !/head/i.test(c.name)),
+    ...candidates.filter((c) => /head/i.test(c.name)),
+  ];
 
-  const data = await postJsonWithTimeout(
-    'https://wandbox.org/api/compile.json',
-    { code, compiler: chosen.name, stdin, save: false },
-    { timeoutMs: TIMEOUT_MS },
-  );
+  const CONTAINER_FAILURE = /catatonit|failed to exec pid1/i;
+  let lastResult = null;
+  let lastError = null;
+
+  for (const compiler of ordered.slice(0, 3)) {
+    try {
+      const data = await postJsonWithTimeout(
+        'https://wandbox.org/api/compile.json',
+        { code, compiler: compiler.name, stdin, save: false },
+        { timeoutMs: TIMEOUT_MS },
+      );
+      const looksBroken = CONTAINER_FAILURE.test(data.program_error || '') || CONTAINER_FAILURE.test(data.compiler_error || '');
+      lastResult = { compiler: compiler.name, data };
+      if (!looksBroken) break; // good result, stop trying more compilers
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  if (!lastResult) throw lastError || new Error('All Wandbox compiler attempts failed.');
+
+  const { compiler: chosenName, data } = lastResult;
 
   return {
     provider: 'wandbox',
-    compiler: chosen.name,
+    compiler: chosenName,
     stdout: (data.program_output || '').slice(0, 4000),
     stderr: (data.program_error || '').slice(0, 2000),
     exitCode: data.status ? Number(data.status) : null,
