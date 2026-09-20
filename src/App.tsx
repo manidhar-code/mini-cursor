@@ -18,6 +18,10 @@ import { diffLines } from './lib/agent/diff';
 import { PreviewPane } from './lib/panels/PreviewPane';
 import { TerminalPane } from './lib/panels/TerminalPane';
 import { OutputPane } from './lib/panels/OutputPane';
+import { FileExplorer } from './lib/panels/FileExplorer';
+import { extractMentionedFiles, buildMentionContext, activeMentionQuery, applyMentionCompletion } from './lib/utils/mentions';
+import { loadProject, saveProject, exportProjectZip, importProjectZip } from './lib/storage/project';
+import { formatCode, isFormattable } from './lib/format/formatCode';
 import type { AgentActivityEvent, PendingFileChange } from './lib/agent/types';
 import type { OpenFile, ProviderKey, AiMode } from './types';
 
@@ -346,6 +350,40 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aiMode, setAiMode] = useState<AiMode>('ask');
+  const [explorerOpen, setExplorerOpen] = useState(true);
+  const [mentionQuery, setMentionQuery] = useState<string | null>(null);
+  const [formatting, setFormatting] = useState(false);
+  const [formatError, setFormatError] = useState<string | null>(null);
+
+  // Persistent projects — restore whatever was saved last time on mount.
+  // Only runs once; an empty saved project (or none saved yet) just leaves
+  // the normal empty-state UI in place.
+  const restoredRef = useRef(false);
+  useEffect(() => {
+    if (restoredRef.current) return;
+    restoredRef.current = true;
+    const restored = loadProject();
+    if (restored && restored.files.length > 0) {
+      setOpenFiles(restored.files);
+      setActiveFile(restored.activeFile ?? restored.files[0].path);
+    }
+  }, []);
+
+  // Autosave — debounced so rapid typing doesn't hit localStorage on every
+  // keystroke. Skips the very first render (nothing to save yet / would
+  // otherwise immediately overwrite what restore just loaded before it
+  // finishes if effects ordering ever changes).
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!restoredRef.current) return;
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      saveProject(openFiles, activeFile);
+    }, 600);
+    return () => {
+      if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    };
+  }, [openFiles, activeFile]);
 
   // Resizable layout — editor-pane vs chat-pane (horizontal split) and
   // editor-area vs bottom-panel (vertical split). Plain pixel sizes in
@@ -444,6 +482,48 @@ export default function App() {
     },
     [activeFile, openFiles],
   );
+
+  const handleImportZip = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.zip';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const imported = await importProjectZip(file);
+        if (imported.length === 0) {
+          alert('That zip had no readable text files in it.');
+          return;
+        }
+        setOpenFiles((prev) => {
+          const byPath = new Map(prev.map((f) => [f.path, f]));
+          for (const f of imported) byPath.set(f.path, f);
+          return [...byPath.values()];
+        });
+        setActiveFile(imported[0].path);
+      } catch (err) {
+        alert('Could not read that zip: ' + (err instanceof Error ? err.message : String(err)));
+      }
+    };
+    input.click();
+  }, []);
+
+  const handleFormatCurrentFile = useCallback(async () => {
+    if (!currentFile) return;
+    setFormatting(true);
+    setFormatError(null);
+    const result = await formatCode(currentFile.content, currentFile.language);
+    setFormatting(false);
+    if (!result.ok) {
+      setFormatError(result.error);
+      alert('Formatting failed: ' + result.error);
+      return;
+    }
+    setOpenFiles((prev) =>
+      prev.map((f) => (f.path === currentFile.path ? { ...f, content: result.code, modified: true } : f)),
+    );
+  }, [currentFile]);
 
   const handleEditorChange = useCallback(
     (value: string | undefined) => {
@@ -649,9 +729,18 @@ export default function App() {
     }
 
     if (isStreaming) return;
-    sendMessage(chatInput, currentFile?.content);
+
+    // Expand any "@filename" mentions into extra file context, on top of
+    // the current file's own content (kept separate so the current file
+    // isn't duplicated if someone also @-mentions it).
+    const mentioned = extractMentionedFiles(chatInput, openFiles).filter((f) => f.path !== activeFile);
+    const mentionBlock = mentioned.length > 0 ? buildMentionContext(mentioned) : '';
+    const combinedContext = [currentFile?.content, mentionBlock].filter(Boolean).join('\n\n');
+
+    sendMessage(chatInput, combinedContext || undefined);
     setChatInput('');
-  }, [chatInput, aiMode, agentRunning, handleRunAgent, currentFile, openAiEdit, isStreaming, sendMessage]);
+    setMentionQuery(null);
+  }, [chatInput, aiMode, agentRunning, handleRunAgent, currentFile, openFiles, activeFile, openAiEdit, isStreaming, sendMessage]);
 
   const handleApplyAgentChanges = useCallback(() => {
     if (!agentTurn) return;
@@ -743,9 +832,19 @@ export default function App() {
 
   return (
     <div className="app-shell" ref={appShellRef}>
+      {explorerOpen && (
+        <FileExplorer
+          files={openFiles}
+          activeFile={activeFile}
+          onSelect={setActiveFile}
+          onDelete={closeFile}
+          onNewFile={createNewFile}
+        />
+      )}
       {/* Editor Pane */}
       <div className="editor-pane" ref={editorPaneRef}>
         <div className="tab-bar">
+          <button className="tab" onClick={() => setExplorerOpen((v) => !v)} title="Toggle file explorer">☰</button>
           {openFiles.map((file) => (
             <button key={file.path} className={tabClassName(file)}
               onClick={() => setActiveFile(file.path)}>
@@ -756,8 +855,27 @@ export default function App() {
                 aria-label={'Close ' + file.name}>x</button>
             </button>
           ))}
-          <button className="tab" onClick={createNewFile} title="New file">+</button>
+          <button className="tab" onClick={createNewFile} title="New file (you can type a folder path, e.g. src/App.tsx)">+</button>
           <button className="tab" onClick={openFromUpload} title="Open file">Open</button>
+          <button
+            className="tab"
+            title="Export the whole project as a .zip"
+            onClick={() => exportProjectZip(openFiles).catch((err) => alert('Export failed: ' + (err instanceof Error ? err.message : String(err))))}
+            disabled={openFiles.length === 0}
+          >
+            ⬇ Export
+          </button>
+          <button className="tab" onClick={handleImportZip} title="Import a project from a .zip">⬆ Import</button>
+          {currentFile && isFormattable(currentFile.language) && (
+            <button
+              className="tab"
+              onClick={handleFormatCurrentFile}
+              disabled={formatting}
+              title="Format this file with Prettier"
+            >
+              {formatting ? 'Formatting…' : '✦ Format'}
+            </button>
+          )}
           <div className="tab-bar-spacer" />
           <div className="panel-toggle-group">
             <button
@@ -1020,13 +1138,44 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="composer-input-wrap">
+          <div className="composer-input-wrap" style={{ position: 'relative' }}>
+            {mentionQuery !== null && (() => {
+              const q = mentionQuery.toLowerCase();
+              const matches = openFiles.filter((f) => f.path.toLowerCase().includes(q)).slice(0, 6);
+              if (matches.length === 0) return null;
+              return (
+                <div className="mention-dropdown">
+                  {matches.map((f) => (
+                    <button
+                      key={f.path}
+                      className="mention-dropdown-item"
+                      onClick={() => {
+                        const textarea = textareaRef.current;
+                        const cursor = textarea?.selectionStart ?? chatInput.length;
+                        const { text, cursorPos } = applyMentionCompletion(chatInput, cursor, f.path);
+                        setChatInput(text);
+                        setMentionQuery(null);
+                        requestAnimationFrame(() => {
+                          textarea?.focus();
+                          textarea?.setSelectionRange(cursorPos, cursorPos);
+                        });
+                      }}
+                    >
+                      📄 {f.path}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
             <textarea
               ref={textareaRef}
               className="composer-input"
               rows={3}
               value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
+              onChange={(e) => {
+                setChatInput(e.target.value);
+                setMentionQuery(activeMentionQuery(e.target.value, e.target.selectionStart));
+              }}
               onKeyDown={handleKeyDown}
               placeholder={
                 !hasKeys
