@@ -4,6 +4,7 @@ import { useSettings } from './hooks/useSettings';
 import { useChat, INLINE_EDIT_SYSTEM_PROMPT } from './hooks/useChat';
 import { useAgent } from './hooks/useAgent';
 import { useRunner } from './hooks/useRunner';
+import { useEditHistory } from './hooks/useEditHistory';
 import { detectLanguage, extensionForLanguage } from './lib/utils/language';
 import { chatWithFallback, type ProviderModel, type ApiKeys } from './lib/api';
 import { stripCodeFence } from './lib/markdown/parse';
@@ -19,8 +20,12 @@ import { PreviewPane } from './lib/panels/PreviewPane';
 import { TerminalPane } from './lib/panels/TerminalPane';
 import { OutputPane } from './lib/panels/OutputPane';
 import { FileExplorer } from './lib/panels/FileExplorer';
+import { CommandPalette, type Command } from './lib/panels/CommandPalette';
+import { FindInProject } from './lib/panels/FindInProject';
+import { EditHistoryPanel } from './lib/panels/EditHistoryPanel';
 import { extractMentionedFiles, buildMentionContext, activeMentionQuery, applyMentionCompletion } from './lib/utils/mentions';
 import { loadProject, saveProject, exportProjectZip, importProjectZip } from './lib/storage/project';
+import { deployToNetlify, type DeployResult } from './lib/deploy/netlifyDeploy';
 import { formatCode, isFormattable } from './lib/format/formatCode';
 import type { AgentActivityEvent, PendingFileChange } from './lib/agent/types';
 import type { OpenFile, ProviderKey, AiMode } from './types';
@@ -103,6 +108,7 @@ function TrashIcon() {
 function SettingsPanel({
   open, onClose, settings, onSetGroqKey, onSetMistralKey, onSetOpenrouterKey, onSetGeminiKey,
   onSetInlineCompletionsEnabled, onSetAgentRequireApproval,
+  onSetTheme, onSetEditorFontSize, onSetEditorTabSize, onSetNetlifyToken,
 }: {
   open: boolean;
   onClose: () => void;
@@ -113,6 +119,10 @@ function SettingsPanel({
   onSetGeminiKey: (k: string) => void;
   onSetInlineCompletionsEnabled: (enabled: boolean) => void;
   onSetAgentRequireApproval: (required: boolean) => void;
+  onSetTheme: (theme: 'dark' | 'light') => void;
+  onSetEditorFontSize: (size: number) => void;
+  onSetEditorTabSize: (size: number) => void;
+  onSetNetlifyToken: (token: string) => void;
 }) {
   if (!open) return null;
   return (
@@ -168,6 +178,57 @@ function SettingsPanel({
             another model that has a key configured — you'll see which one actually replied under its response.
           </p>
         </div>
+
+        <div className="settings-group">
+          <label>Theme</label>
+          <div className="provider-toggle">
+            <button
+              className={'provider-btn' + (settings.theme === 'dark' ? ' active' : '')}
+              onClick={() => onSetTheme('dark')}
+            >
+              Dark
+            </button>
+            <button
+              className={'provider-btn' + (settings.theme === 'light' ? ' active' : '')}
+              onClick={() => onSetTheme('light')}
+            >
+              Light
+            </button>
+          </div>
+        </div>
+        <div className="settings-group">
+          <label>Editor font size ({settings.editorFontSize}px)</label>
+          <input
+            type="range" min={11} max={22} step={1}
+            value={settings.editorFontSize}
+            onChange={(e) => onSetEditorFontSize(Number(e.target.value))}
+            style={{ width: '100%' }}
+          />
+        </div>
+        <div className="settings-group">
+          <label>Tab size ({settings.editorTabSize} spaces)</label>
+          <div className="provider-toggle">
+            {[2, 4].map((size) => (
+              <button
+                key={size}
+                className={'provider-btn' + (settings.editorTabSize === size ? ' active' : '')}
+                onClick={() => onSetEditorTabSize(size)}
+              >
+                {size}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="settings-group">
+          <label>Netlify Access Token</label>
+          <input className="settings-input" type="password" placeholder="nfp_..."
+            value={settings.netlifyToken} onChange={(e) => onSetNetlifyToken(e.target.value)} />
+          <p className="settings-hint">
+            Optional — only needed for the Deploy button. Create a personal access token at
+            app.netlify.com/user/applications, under "New access token". Kept only in your browser, same as your AI provider keys.
+          </p>
+        </div>
+
         <div style={{ marginTop: 20, textAlign: 'right' }}>
           <button className="settings-btn primary" onClick={onClose}>Done</button>
         </div>
@@ -215,6 +276,49 @@ function AiEditModal({
           <button className="settings-btn" onClick={onClose}>Cancel</button>
           <button className="settings-btn primary" onClick={onSubmit} disabled={loading || !instruction.trim()}>
             {loading ? 'Editing…' : 'Edit (Ctrl+Enter)'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── Explain Error modal ──────────────────────────────────────── */
+function ExplainErrorModal({
+  open, fileName, loading, errorText, onChangeErrorText, onSubmit, onClose,
+}: {
+  open: boolean;
+  fileName: string;
+  loading: boolean;
+  errorText: string;
+  onChangeErrorText: (v: string) => void;
+  onSubmit: () => void;
+  onClose: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="settings-overlay" onClick={onClose}>
+      <div className="ai-edit-panel" onClick={(e) => e.stopPropagation()}>
+        <h3>🐛 Explain this error{fileName ? ' — ' + fileName : ''}</h3>
+        <p className="settings-hint" style={{ marginBottom: 10 }}>
+          Paste an error message or stack trace. The AI will explain what's wrong and suggest a fix, using the open file as context if there is one.
+        </p>
+        <textarea
+          className="ai-edit-input"
+          autoFocus
+          rows={6}
+          placeholder="Paste the error or stack trace here…"
+          value={errorText}
+          onChange={(e) => onChangeErrorText(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); onSubmit(); }
+            if (e.key === 'Escape') onClose();
+          }}
+        />
+        <div className="ai-edit-actions">
+          <button className="settings-btn" onClick={onClose}>Cancel</button>
+          <button className="settings-btn primary" onClick={onSubmit} disabled={loading || !errorText.trim()}>
+            {loading ? 'Asking…' : 'Explain (Ctrl+Enter)'}
           </button>
         </div>
       </div>
@@ -341,7 +445,8 @@ export default function App() {
   const {
     settings, setGroqKey, setMistralKey, setOpenrouterKey, setGeminiKey, setProvider,
     setGroqModel, setMistralModel, setOpenrouterModel, setGeminiModel,
-    setInlineCompletionsEnabled, setAgentRequireApproval, hasKeys,
+    setInlineCompletionsEnabled, setAgentRequireApproval,
+    setTheme, setEditorFontSize, setEditorTabSize, setNetlifyToken, hasKeys,
   } = useSettings();
   const { messages, isStreaming, error, sendMessage, clearChat } = useChat(settings);
 
@@ -354,6 +459,8 @@ export default function App() {
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [formatting, setFormatting] = useState(false);
   const [formatError, setFormatError] = useState<string | null>(null);
+  const [deploying, setDeploying] = useState(false);
+  const [deployResult, setDeployResult] = useState<DeployResult | null>(null);
 
   // Persistent projects — restore whatever was saved last time on mount.
   // Only runs once; an empty saved project (or none saved yet) just leaves
@@ -368,6 +475,13 @@ export default function App() {
       setActiveFile(restored.activeFile ?? restored.files[0].path);
     }
   }, []);
+
+  // Applies the chosen theme to the whole document (not just the Monaco
+  // editor) — the CSS in index.css defines light-theme overrides under
+  // [data-theme="light"].
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', settings.theme);
+  }, [settings.theme]);
 
   // Autosave — debounced so rapid typing doesn't hit localStorage on every
   // keystroke. Skips the very first render (nothing to save yet / would
@@ -401,6 +515,15 @@ export default function App() {
   const [aiEditError, setAiEditError] = useState<string | null>(null);
   const aiEditRangeRef = useRef<{ start: number; end: number; original: string; hasSelection: boolean } | null>(null);
 
+  // Explain Error modal
+  const [explainErrorOpen, setExplainErrorOpen] = useState(false);
+  const [explainErrorText, setExplainErrorText] = useState('');
+
+  // Find-in-project / Command palette
+  const [findOpen, setFindOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const pendingJumpLineRef = useRef<number | null>(null);
+
   const editorRef = useRef<any>(null);
   const monacoRef = useRef<any>(null);
   const inlineCompletionDisposableRef = useRef<{ dispose: () => void } | null>(null);
@@ -424,6 +547,8 @@ export default function App() {
   // Preview / Terminal / Output bottom panel
   const [bottomPanelTab, setBottomPanelTab] = useState<BottomPanelTab>(null);
   const runner = useRunner();
+  const editHistory = useEditHistory();
+  const [historyOpen, setHistoryOpen] = useState(false);
   const runCurrentFile = useCallback(() => {
     if (!currentFile) return;
     runner.run(currentFile);
@@ -508,6 +633,19 @@ export default function App() {
     };
     input.click();
   }, []);
+
+  const handleDeploy = useCallback(async () => {
+    if (!settings.netlifyToken.trim()) {
+      alert('Add a Netlify access token in Settings first — see the hint under "Netlify Access Token".');
+      setSettingsOpen(true);
+      return;
+    }
+    setDeploying(true);
+    setDeployResult(null);
+    const result = await deployToNetlify(settings.netlifyToken, openFiles);
+    setDeployResult(result);
+    setDeploying(false);
+  }, [settings.netlifyToken, openFiles]);
 
   const handleFormatCurrentFile = useCallback(async () => {
     if (!currentFile) return;
@@ -676,6 +814,7 @@ export default function App() {
       ]);
       const cleaned = stripCodeFence(result);
       const targetPath = activeFile;
+      editHistory.record('AI Edit: ' + currentFile.name, openFilesRef.current);
       setOpenFiles((prev) =>
         prev.map((f) => {
           if (f.path !== targetPath) return f;
@@ -688,7 +827,7 @@ export default function App() {
     } finally {
       setAiEditLoading(false);
     }
-  }, [currentFile, activeFile, aiEditInstruction, settings]);
+  }, [currentFile, activeFile, aiEditInstruction, settings, editHistory]);
 
   /* ── Chat / Ask / Edit / Agent dispatch ──────────────────────── */
 
@@ -703,11 +842,12 @@ export default function App() {
   const handleRunAgent = useCallback((instruction: string) => {
     runAgentTurn(instruction).then((outcome) => {
       if (outcome?.autoApply) {
+        editHistory.record('Agent: ' + instruction.slice(0, 60), openFilesRef.current);
         setOpenFiles((prev) => applyPendingChanges(prev, outcome.result.pendingChanges));
         markAgentApplied();
       }
     });
-  }, [runAgentTurn, markAgentApplied]);
+  }, [runAgentTurn, markAgentApplied, editHistory]);
 
   const handleSendMessage = useCallback(() => {
     if (!chatInput.trim()) return;
@@ -744,15 +884,26 @@ export default function App() {
 
   const handleApplyAgentChanges = useCallback(() => {
     if (!agentTurn) return;
+    editHistory.record('Agent: ' + agentTurn.pendingChanges.map((c) => c.path).join(', '), openFilesRef.current);
     setOpenFiles((prev) => applyPendingChanges(prev, agentTurn.pendingChanges));
     markAgentApplied();
     setAgentDiffOpen(false);
-  }, [agentTurn, markAgentApplied]);
+  }, [agentTurn, markAgentApplied, editHistory]);
 
   const handleRejectAgentChanges = useCallback(() => {
     markAgentRejected();
     setAgentDiffOpen(false);
   }, [markAgentRejected]);
+
+  // Reverting restores the snapshot taken right before that entry's edit —
+  // and, so revert itself is undoable, first records the *current* state
+  // as a new history entry before jumping back.
+  const revertToEntry = useCallback((id: string) => {
+    const entry = editHistory.history.find((h) => h.id === id);
+    if (!entry) return;
+    editHistory.record('Before revert to: ' + entry.label, openFilesRef.current);
+    setOpenFiles(entry.snapshot);
+  }, [editHistory]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -763,6 +914,98 @@ export default function App() {
     },
     [handleSendMessage],
   );
+
+  /* ── Review file / Explain error ─────────────────────────────── */
+
+  const handleReviewFile = useCallback(() => {
+    if (!currentFile || isStreaming) return;
+    setAiMode('ask');
+    sendMessage(
+      `Please review this file for bugs, unused code, unclear naming, and possible improvements. Be specific and reference the relevant part of the code for each point. If it looks solid, say so plainly rather than inventing nitpicks.`,
+      currentFile.content,
+    );
+  }, [currentFile, isStreaming, sendMessage]);
+
+  const openExplainError = useCallback(() => {
+    setExplainErrorText('');
+    setExplainErrorOpen(true);
+  }, []);
+
+  const submitExplainError = useCallback(() => {
+    if (!explainErrorText.trim() || isStreaming) return;
+    setAiMode('ask');
+    sendMessage(
+      `I'm seeing this error/stack trace:\n\n${explainErrorText}\n\nPlease explain what's causing it and suggest a fix.`,
+      currentFile?.content,
+    );
+    setExplainErrorOpen(false);
+  }, [explainErrorText, isStreaming, currentFile, sendMessage]);
+
+  /* ── Find in project / Command palette ───────────────────────── */
+
+  const jumpToFile = useCallback((path: string, lineNumber?: number) => {
+    if (lineNumber) pendingJumpLineRef.current = lineNumber;
+    setActiveFile(path);
+  }, []);
+
+  // Once the editor has (re)mounted for the newly-active file, jump to the
+  // pending line from a Find-in-project result, if there is one.
+  useEffect(() => {
+    if (pendingJumpLineRef.current == null) return;
+    const line = pendingJumpLineRef.current;
+    pendingJumpLineRef.current = null;
+    const editor = editorRef.current;
+    if (!editor) return;
+    // Small delay — Monaco needs a tick to finish swapping to the new
+    // file's model before revealLineInCenter/setPosition have any effect.
+    const t = setTimeout(() => {
+      editor.revealLineInCenter(line);
+      editor.setPosition({ lineNumber: line, column: 1 });
+      editor.focus();
+    }, 60);
+    return () => clearTimeout(t);
+  }, [activeFile]);
+
+  const paletteCommands: Command[] = [
+    { id: 'new-file', label: 'New File', hint: 'Ctrl+click supports folder paths', action: createNewFile },
+    { id: 'open-file', label: 'Open File(s)…', action: openFromUpload },
+    { id: 'export-zip', label: 'Export Project as .zip', action: () => exportProjectZip(openFiles).catch((err) => alert('Export failed: ' + (err instanceof Error ? err.message : String(err)))) },
+    { id: 'import-zip', label: 'Import Project from .zip', action: handleImportZip },
+    { id: 'toggle-explorer', label: explorerOpen ? 'Hide File Explorer' : 'Show File Explorer', action: () => setExplorerOpen((v) => !v) },
+    { id: 'toggle-preview', label: 'Toggle Preview Panel', action: () => setBottomPanelTab((t) => (t === 'preview' ? null : 'preview')) },
+    { id: 'toggle-terminal', label: 'Toggle Terminal Panel', action: () => setBottomPanelTab((t) => (t === 'terminal' ? null : 'terminal')) },
+    { id: 'toggle-output', label: 'Toggle Output Panel', action: () => setBottomPanelTab((t) => (t === 'output' ? null : 'output')) },
+    { id: 'run-file', label: 'Run Current File', hint: 'Ctrl+Enter', action: runCurrentFile },
+    { id: 'format-file', label: 'Format Current File with Prettier', action: handleFormatCurrentFile },
+    { id: 'deploy', label: 'Deploy to Netlify', action: handleDeploy },
+    { id: 'review-file', label: 'AI: Review Current File', action: handleReviewFile },
+    { id: 'explain-error', label: 'AI: Explain an Error…', action: openExplainError },
+    { id: 'find-in-project', label: 'Find in Project…', hint: 'Ctrl+Shift+F', action: () => setFindOpen(true) },
+    { id: 'edit-history', label: 'View AI Edit History', action: () => setHistoryOpen(true) },
+    { id: 'toggle-theme', label: settings.theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme', action: () => setTheme(settings.theme === 'dark' ? 'light' : 'dark') },
+    { id: 'open-settings', label: 'Open Settings', action: () => setSettingsOpen(true) },
+    { id: 'clear-chat', label: 'Clear Chat', action: clearChat },
+  ];
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        setPaletteOpen(false);
+        setFindOpen(true);
+      } else if (mod && e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setFindOpen(false);
+        setPaletteOpen(true);
+      } else if (e.key === 'Escape') {
+        setFindOpen(false);
+        setPaletteOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -876,6 +1119,9 @@ export default function App() {
               {formatting ? 'Formatting…' : '✦ Format'}
             </button>
           )}
+          <button className="tab" onClick={handleDeploy} disabled={deploying} title="Deploy the current HTML/CSS/JS files to Netlify">
+            {deploying ? 'Deploying…' : '🚀 Deploy'}
+          </button>
           <div className="tab-bar-spacer" />
           <div className="panel-toggle-group">
             <button
@@ -902,6 +1148,19 @@ export default function App() {
           </div>
         </div>
 
+        {deployResult && (
+          <div className={'deploy-banner' + (deployResult.ok ? ' ok' : ' fail')}>
+            {deployResult.ok ? (
+              <span>
+                ✅ Deployed — <a href={deployResult.url} target="_blank" rel="noreferrer">{deployResult.url}</a>
+              </span>
+            ) : (
+              <span>❌ Deploy failed — {deployResult.error}</span>
+            )}
+            <button className="icon-btn" title="Dismiss" onClick={() => setDeployResult(null)}>✕</button>
+          </div>
+        )}
+
         <div className="editor-area">
           {currentFile ? (
             <Editor
@@ -910,9 +1169,9 @@ export default function App() {
               value={currentFile.content}
               onChange={handleEditorChange}
               onMount={handleEditorMount}
-              theme="vs-dark"
+              theme={settings.theme === 'light' ? 'vs' : 'vs-dark'}
               options={{
-                fontSize: 14,
+                fontSize: settings.editorFontSize,
                 fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace",
                 minimap: { enabled: true, scale: 1 },
                 padding: { top: 12, bottom: 12 },
@@ -928,7 +1187,7 @@ export default function App() {
                 autoClosingQuotes: 'always',
                 formatOnPaste: true,
                 suggestOnTriggerCharacters: true,
-                tabSize: 2,
+                tabSize: settings.editorTabSize,
               }}
             />
           ) : (
@@ -1209,6 +1468,23 @@ export default function App() {
                   ✨ Ctrl+K
                 </button>
               )}
+              {currentFile && (
+                <button className="ai-edit-trigger" onClick={handleReviewFile} disabled={isStreaming} title="AI reviews the current file for bugs/improvements">
+                  🔍 Review
+                </button>
+              )}
+              <button className="ai-edit-trigger" onClick={openExplainError} disabled={isStreaming} title="Paste an error/stack trace for the AI to explain">
+                🐛 Explain Error
+              </button>
+              <button className="ai-edit-trigger" onClick={() => setFindOpen(true)} title="Find in Project (Ctrl+Shift+F)">
+                🔎 Find
+              </button>
+              <button className="ai-edit-trigger" onClick={() => setPaletteOpen(true)} title="Command Palette (Ctrl+Shift+P)">
+                ⌘ Palette
+              </button>
+              <button className="ai-edit-trigger" onClick={() => setHistoryOpen(true)} title="View/revert AI edit history">
+                🕐 History{editHistory.history.length > 0 ? ` (${editHistory.history.length})` : ''}
+              </button>
             </div>
             <div className="composer-footer-right">
               <select
@@ -1238,6 +1514,10 @@ export default function App() {
         onSetGeminiKey={setGeminiKey}
         onSetInlineCompletionsEnabled={setInlineCompletionsEnabled}
         onSetAgentRequireApproval={setAgentRequireApproval}
+        onSetTheme={setTheme}
+        onSetEditorFontSize={setEditorFontSize}
+        onSetEditorTabSize={setEditorTabSize}
+        onSetNetlifyToken={setNetlifyToken}
       />
 
       <AiEditModal
@@ -1258,6 +1538,36 @@ export default function App() {
         onApply={handleApplyAgentChanges}
         onReject={handleRejectAgentChanges}
         onClose={() => setAgentDiffOpen(false)}
+      />
+
+      <ExplainErrorModal
+        open={explainErrorOpen}
+        fileName={currentFile?.name ?? ''}
+        loading={isStreaming}
+        errorText={explainErrorText}
+        onChangeErrorText={setExplainErrorText}
+        onSubmit={submitExplainError}
+        onClose={() => setExplainErrorOpen(false)}
+      />
+
+      <FindInProject
+        open={findOpen}
+        onClose={() => setFindOpen(false)}
+        files={openFiles}
+        onJumpTo={jumpToFile}
+      />
+
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        commands={paletteCommands}
+      />
+
+      <EditHistoryPanel
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        history={editHistory.history}
+        onRevert={(id) => { revertToEntry(id); setHistoryOpen(false); }}
       />
     </div>
   );

@@ -44,6 +44,10 @@ export type ProviderSettings = {
   geminiModel: string;
   inlineCompletionsEnabled: boolean;
   agentRequireApproval: boolean;
+  theme: 'dark' | 'light';
+  editorFontSize: number;
+  editorTabSize: number;
+  netlifyToken: string;
 };
 
 export type AiMode = 'ask' | 'edit' | 'agent';

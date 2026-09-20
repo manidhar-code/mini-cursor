@@ -18,6 +18,10 @@ const DEFAULT_SETTINGS: ProviderSettings = {
   geminiModel: GEMINI_MODELS.chat,
   inlineCompletionsEnabled: true,
   agentRequireApproval: true, // Phase 15: safe by default
+  theme: 'dark',
+  editorFontSize: 14,
+  editorTabSize: 2,
+  netlifyToken: '',
 };
 
 export function loadSettings(): ProviderSettings {

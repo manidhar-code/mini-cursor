@@ -53,6 +53,22 @@ export function useSettings() {
     setSettings((s) => ({ ...s, agentRequireApproval: required }));
   }, []);
 
+  const setTheme = useCallback((theme: 'dark' | 'light') => {
+    setSettings((s) => ({ ...s, theme }));
+  }, []);
+
+  const setEditorFontSize = useCallback((size: number) => {
+    setSettings((s) => ({ ...s, editorFontSize: size }));
+  }, []);
+
+  const setEditorTabSize = useCallback((size: number) => {
+    setSettings((s) => ({ ...s, editorTabSize: size }));
+  }, []);
+
+  const setNetlifyToken = useCallback((token: string) => {
+    setSettings((s) => ({ ...s, netlifyToken: token }));
+  }, []);
+
   const hasKeys = Boolean(
     settings.groqApiKey || settings.mistralApiKey || settings.openrouterApiKey || settings.geminiApiKey,
   );
@@ -70,6 +86,10 @@ export function useSettings() {
     setGeminiModel,
     setInlineCompletionsEnabled,
     setAgentRequireApproval,
+    setTheme,
+    setEditorFontSize,
+    setEditorTabSize,
+    setNetlifyToken,
     hasKeys,
   };
 }
