@@ -567,35 +567,58 @@ export default function App() {
     setActiveFile(name);
   }, []);
 
+  // Shared by both "Open Files" and "Open Folder" — the only difference
+  // between them is the `webkitdirectory` flag on the <input>, which
+  // changes what the native picker shows (a file chooser vs. a folder
+  // chooser). When a folder is picked, each File's `webkitRelativePath`
+  // carries the folder structure (e.g. "myproject/src/App.tsx"); for a
+  // plain multi-file pick that property is usually empty, so this falls
+  // back to the bare filename — which is exactly the old behavior.
+  const loadFilesFromInput = useCallback((files: FileList) => {
+    Array.from(files).forEach((file) => {
+      const path = file.webkitRelativePath || file.name;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const content = String(reader.result);
+        const nf: OpenFile = {
+          path, name: file.name, content,
+          language: detectLanguage(path), modified: false,
+        };
+        setOpenFiles((prev) => {
+          const idx = prev.findIndex((f) => f.path === path);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = nf;
+            return next;
+          }
+          return [...prev, nf];
+        });
+        setActiveFile(path);
+      };
+      reader.readAsText(file);
+    });
+  }, []);
+
   const openFromUpload = useCallback(() => {
     const input = document.createElement('input');
     input.type = 'file';
     input.multiple = true;
-    input.onchange = () => {
-      Array.from(input.files || []).forEach((file) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const content = String(reader.result);
-          const nf: OpenFile = {
-            path: file.name, name: file.name, content,
-            language: detectLanguage(file.name), modified: false,
-          };
-          setOpenFiles((prev) => {
-            const idx = prev.findIndex((f) => f.path === file.name);
-            if (idx >= 0) {
-              const next = [...prev];
-              next[idx] = nf;
-              return next;
-            }
-            return [...prev, nf];
-          });
-          setActiveFile(file.name);
-        };
-        reader.readAsText(file);
-      });
-    };
+    input.onchange = () => { if (input.files) loadFilesFromInput(input.files); };
     input.click();
-  }, []);
+  }, [loadFilesFromInput]);
+
+  // "Open Folder" — a real folder picker, unlike the plain multi-file
+  // dialog above. Supported in Chromium browsers (Chrome, Edge) and
+  // Safari; Firefox's support has historically lagged, so this is offered
+  // as an addition to "Open Files", not a replacement for it.
+  const openFolderFromUpload = useCallback(() => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.webkitdirectory = true;
+    input.multiple = true;
+    input.onchange = () => { if (input.files) loadFilesFromInput(input.files); };
+    input.click();
+  }, [loadFilesFromInput]);
 
   const closeFile = useCallback(
     (path: string) => {
@@ -969,6 +992,7 @@ export default function App() {
   const paletteCommands: Command[] = [
     { id: 'new-file', label: 'New File', hint: 'Ctrl+click supports folder paths', action: createNewFile },
     { id: 'open-file', label: 'Open File(s)…', action: openFromUpload },
+    { id: 'open-folder', label: 'Open Folder…', hint: 'keeps folder structure', action: openFolderFromUpload },
     { id: 'export-zip', label: 'Export Project as .zip', action: () => exportProjectZip(openFiles).catch((err) => alert('Export failed: ' + (err instanceof Error ? err.message : String(err)))) },
     { id: 'import-zip', label: 'Import Project from .zip', action: handleImportZip },
     { id: 'toggle-explorer', label: explorerOpen ? 'Hide File Explorer' : 'Show File Explorer', action: () => setExplorerOpen((v) => !v) },
@@ -1099,7 +1123,8 @@ export default function App() {
             </button>
           ))}
           <button className="tab" onClick={createNewFile} title="New file (you can type a folder path, e.g. src/App.tsx)">+</button>
-          <button className="tab" onClick={openFromUpload} title="Open file">Open</button>
+          <button className="tab" onClick={openFromUpload} title="Open one or more individual files">Open Files</button>
+          <button className="tab" onClick={openFolderFromUpload} title="Open a whole folder, keeping its folder structure (Chrome/Edge/Safari)">📁 Open Folder</button>
           <button
             className="tab"
             title="Export the whole project as a .zip"
