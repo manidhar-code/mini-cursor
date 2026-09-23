@@ -27,6 +27,12 @@ import { extractMentionedFiles, buildMentionContext, activeMentionQuery, applyMe
 import { loadProject, saveProject, exportProjectZip, importProjectZip } from './lib/storage/project';
 import { deployToNetlify, type DeployResult } from './lib/deploy/netlifyDeploy';
 import { formatCode, isFormattable } from './lib/format/formatCode';
+import { filterFileSelection } from './lib/utils/fileFilters';
+import {
+  MenuIcon, FolderOpenIcon, FileIcon, DownloadIcon, UploadIcon, WandIcon, RocketIcon,
+  EyeIcon, TerminalIcon, OutputIcon, CloseIcon, SearchIcon, BugIcon, CommandIcon,
+  ClockIcon, CheckIcon, PlusIcon, SparkleIcon, ZapIcon, InboxIcon, ChatIcon, BotIcon,
+} from './lib/icons/Icons';
 import type { AgentActivityEvent, PendingFileChange } from './lib/agent/types';
 import type { OpenFile, ProviderKey, AiMode } from './types';
 
@@ -255,7 +261,7 @@ function AiEditModal({
   return (
     <div className="settings-overlay" onClick={onClose}>
       <div className="ai-edit-panel" onClick={(e) => e.stopPropagation()}>
-        <h3>✨ Edit with AI — {fileName}</h3>
+        <h3 className="modal-title"><SparkleIcon size={16} /> Edit with AI — {fileName}</h3>
         <p className="settings-hint" style={{ marginBottom: 10 }}>
           {hasSelection ? 'Editing your selection.' : 'No selection — editing the whole file.'}
         </p>
@@ -299,7 +305,7 @@ function ExplainErrorModal({
   return (
     <div className="settings-overlay" onClick={onClose}>
       <div className="ai-edit-panel" onClick={(e) => e.stopPropagation()}>
-        <h3>🐛 Explain this error{fileName ? ' — ' + fileName : ''}</h3>
+        <h3 className="modal-title"><BugIcon size={16} /> Explain this error{fileName ? ' — ' + fileName : ''}</h3>
         <p className="settings-hint" style={{ marginBottom: 10 }}>
           Paste an error message or stack trace. The AI will explain what's wrong and suggest a fix, using the open file as context if there is one.
         </p>
@@ -334,7 +340,7 @@ function AgentActivityFeed({ events }: { events: AgentActivityEvent[] }) {
       {events.map((e) => (
         <div key={e.id} className={'agent-activity-row ' + e.status}>
           <span className="agent-activity-icon">
-            {e.status === 'active' ? '●' : e.status === 'success' ? '✓' : e.status === 'error' ? '✕' : '·'}
+            {e.status === 'active' ? <span className="status-dot pulsing" /> : e.status === 'success' ? <CheckIcon size={12} /> : e.status === 'error' ? <CloseIcon size={12} /> : <span className="status-dot" />}
           </span>
           <span className="agent-activity-label">{e.label}</span>
           {e.detail && <span className="agent-activity-detail">{e.detail}</span>}
@@ -415,7 +421,7 @@ function AgentDiffModal({
   return (
     <div className="settings-overlay" onClick={onClose}>
       <div className="agent-diff-panel" onClick={(e) => e.stopPropagation()}>
-        <h3>🤖 Agent wants to modify {changes.length} file{changes.length === 1 ? '' : 's'}</h3>
+        <h3 className="modal-title"><BotIcon size={16} /> Agent wants to modify {changes.length} file{changes.length === 1 ? '' : 's'}</h3>
         <div className="agent-diff-file-list">
           {changes.map((c) => {
             const path = c.kind === 'rename' ? c.path + ' → ' + c.newPath : c.path;
@@ -575,7 +581,17 @@ export default function App() {
   // plain multi-file pick that property is usually empty, so this falls
   // back to the bare filename — which is exactly the old behavior.
   const loadFilesFromInput = useCallback((files: FileList) => {
-    Array.from(files).forEach((file) => {
+    const { toLoad, skippedJunk, skippedTooLarge, skippedOverLimit } = filterFileSelection(Array.from(files));
+
+    if (skippedJunk > 0 || skippedTooLarge > 0 || skippedOverLimit > 0) {
+      const parts: string[] = [];
+      if (skippedJunk > 0) parts.push(`${skippedJunk} from node_modules/.git/build output/binary files`);
+      if (skippedTooLarge > 0) parts.push(`${skippedTooLarge} larger than 1MB`);
+      if (skippedOverLimit > 0) parts.push(`${skippedOverLimit} beyond the 300-file limit for one import`);
+      alert(`Skipped ${skippedJunk + skippedTooLarge + skippedOverLimit} file(s): ${parts.join(', ')}.\n\nLoading ${toLoad.length} file(s).`);
+    }
+
+    toLoad.forEach((file) => {
       const path = file.webkitRelativePath || file.name;
       const reader = new FileReader();
       reader.onload = () => {
@@ -1110,81 +1126,95 @@ export default function App() {
       )}
       {/* Editor Pane */}
       <div className="editor-pane" ref={editorPaneRef}>
-        <div className="tab-bar">
-          <button className="tab" onClick={() => setExplorerOpen((v) => !v)} title="Toggle file explorer">☰</button>
-          {openFiles.map((file) => (
-            <button key={file.path} className={tabClassName(file)}
-              onClick={() => setActiveFile(file.path)}>
-              <span>{file.name}</span>
-              {file.modified && <span className="tab-modified">*</span>}
-              <button className="tab-close"
-                onClick={(e) => { e.stopPropagation(); closeFile(file.path); }}
-                aria-label={'Close ' + file.name}>x</button>
+        <div className="editor-header">
+          <div className="toolbar-row">
+            <button className="toolbar-btn" onClick={createNewFile} title="New file (you can type a folder path, e.g. src/App.tsx)">
+              <PlusIcon size={14} /><span>New</span>
             </button>
-          ))}
-          <button className="tab" onClick={createNewFile} title="New file (you can type a folder path, e.g. src/App.tsx)">+</button>
-          <button className="tab" onClick={openFromUpload} title="Open one or more individual files">Open Files</button>
-          <button className="tab" onClick={openFolderFromUpload} title="Open a whole folder, keeping its folder structure (Chrome/Edge/Safari)">📁 Open Folder</button>
-          <button
-            className="tab"
-            title="Export the whole project as a .zip"
-            onClick={() => exportProjectZip(openFiles).catch((err) => alert('Export failed: ' + (err instanceof Error ? err.message : String(err))))}
-            disabled={openFiles.length === 0}
-          >
-            ⬇ Export
-          </button>
-          <button className="tab" onClick={handleImportZip} title="Import a project from a .zip">⬆ Import</button>
-          {currentFile && isFormattable(currentFile.language) && (
+            <button className="toolbar-btn" onClick={openFromUpload} title="Open one or more individual files">
+              <FileIcon size={14} /><span>Open Files</span>
+            </button>
+            <button className="toolbar-btn" onClick={openFolderFromUpload} title="Open a whole folder, keeping its folder structure (Chrome/Edge/Safari)">
+              <FolderOpenIcon size={14} /><span>Open Folder</span>
+            </button>
+            <span className="toolbar-divider" />
             <button
-              className="tab"
-              onClick={handleFormatCurrentFile}
-              disabled={formatting}
-              title="Format this file with Prettier"
+              className="toolbar-btn"
+              title="Export the whole project as a .zip"
+              onClick={() => exportProjectZip(openFiles).catch((err) => alert('Export failed: ' + (err instanceof Error ? err.message : String(err))))}
+              disabled={openFiles.length === 0}
             >
-              {formatting ? 'Formatting…' : '✦ Format'}
+              <DownloadIcon size={14} /><span>Export</span>
             </button>
-          )}
-          <button className="tab" onClick={handleDeploy} disabled={deploying} title="Deploy the current HTML/CSS/JS files to Netlify">
-            {deploying ? 'Deploying…' : '🚀 Deploy'}
-          </button>
-          <div className="tab-bar-spacer" />
-          <div className="panel-toggle-group">
-            <button
-              className={'panel-toggle-btn' + (bottomPanelTab === 'preview' ? ' active' : '')}
-              onClick={() => setBottomPanelTab((t) => (t === 'preview' ? null : 'preview'))}
-              title="Live preview of open HTML/CSS/JS files"
-            >
-              👁 Preview
+            <button className="toolbar-btn" onClick={handleImportZip} title="Import a project from a .zip">
+              <UploadIcon size={14} /><span>Import</span>
             </button>
-            <button
-              className={'panel-toggle-btn' + (bottomPanelTab === 'terminal' ? ' active' : '')}
-              onClick={() => setBottomPanelTab((t) => (t === 'terminal' ? null : 'terminal'))}
-              title="Run the current file and see a scrollback of runs (Ctrl+Enter)"
-            >
-              ⌨ Terminal
-            </button>
-            <button
-              className={'panel-toggle-btn' + (bottomPanelTab === 'output' ? ' active' : '')}
-              onClick={() => setBottomPanelTab((t) => (t === 'output' ? null : 'output'))}
-              title="Raw output of the most recent run"
-            >
-              📋 Output
-            </button>
-          </div>
-        </div>
-
-        {deployResult && (
-          <div className={'deploy-banner' + (deployResult.ok ? ' ok' : ' fail')}>
-            {deployResult.ok ? (
-              <span>
-                ✅ Deployed — <a href={deployResult.url} target="_blank" rel="noreferrer">{deployResult.url}</a>
-              </span>
-            ) : (
-              <span>❌ Deploy failed — {deployResult.error}</span>
+            {currentFile && isFormattable(currentFile.language) && (
+              <button className="toolbar-btn" onClick={handleFormatCurrentFile} disabled={formatting} title="Format this file with Prettier">
+                <WandIcon size={14} /><span>{formatting ? 'Formatting…' : 'Format'}</span>
+              </button>
             )}
-            <button className="icon-btn" title="Dismiss" onClick={() => setDeployResult(null)}>✕</button>
+            <span className="toolbar-divider" />
+            <button className="toolbar-btn accent" onClick={handleDeploy} disabled={deploying} title="Deploy the current HTML/CSS/JS files to Netlify">
+              <RocketIcon size={14} /><span>{deploying ? 'Deploying…' : 'Deploy'}</span>
+            </button>
+            <div className="tab-bar-spacer" />
+            <div className="panel-toggle-group">
+              <button
+                className={'panel-toggle-btn' + (bottomPanelTab === 'preview' ? ' active' : '')}
+                onClick={() => setBottomPanelTab((t) => (t === 'preview' ? null : 'preview'))}
+                title="Live preview of open HTML/CSS/JS files"
+              >
+                <EyeIcon size={14} /><span>Preview</span>
+              </button>
+              <button
+                className={'panel-toggle-btn' + (bottomPanelTab === 'terminal' ? ' active' : '')}
+                onClick={() => setBottomPanelTab((t) => (t === 'terminal' ? null : 'terminal'))}
+                title="Run the current file and see a scrollback of runs (Ctrl+Enter)"
+              >
+                <TerminalIcon size={14} /><span>Terminal</span>
+              </button>
+              <button
+                className={'panel-toggle-btn' + (bottomPanelTab === 'output' ? ' active' : '')}
+                onClick={() => setBottomPanelTab((t) => (t === 'output' ? null : 'output'))}
+                title="Raw output of the most recent run"
+              >
+                <OutputIcon size={14} /><span>Output</span>
+              </button>
+            </div>
           </div>
-        )}
+
+          <div className="tab-bar">
+            <button className="tab icon-only" onClick={() => setExplorerOpen((v) => !v)} title="Toggle file explorer">
+              <MenuIcon size={15} />
+            </button>
+            {openFiles.map((file) => (
+              <button key={file.path} className={tabClassName(file)}
+                onClick={() => setActiveFile(file.path)}>
+                <span>{file.name}</span>
+                {file.modified && <span className="tab-modified">•</span>}
+                <button className="tab-close"
+                  onClick={(e) => { e.stopPropagation(); closeFile(file.path); }}
+                  aria-label={'Close ' + file.name}>
+                  <CloseIcon size={12} />
+                </button>
+              </button>
+            ))}
+          </div>
+
+          {deployResult && (
+            <div className={'deploy-banner' + (deployResult.ok ? ' ok' : ' fail')}>
+              {deployResult.ok ? (
+                <span>
+                  <CheckIcon size={13} /> Deployed — <a href={deployResult.url} target="_blank" rel="noreferrer">{deployResult.url}</a>
+                </span>
+              ) : (
+                <span><CloseIcon size={13} /> Deploy failed — {deployResult.error}</span>
+              )}
+              <button className="icon-btn" title="Dismiss" onClick={() => setDeployResult(null)}><CloseIcon size={13} /></button>
+            </div>
+          )}
+        </div>
 
         <div className="editor-area">
           {currentFile ? (
@@ -1222,23 +1252,23 @@ export default function App() {
                 Open a file or create a new one to get started.</p>
               <div className="welcome-features">
                 <div className="welcome-feature">
-                  <div className="welcome-feature-icon">💬</div>
+                  <div className="welcome-feature-icon"><ChatIcon size={18} /></div>
                   <span>AI Chat</span>
                 </div>
                 <div className="welcome-feature">
-                  <div className="welcome-feature-icon">⚡</div>
+                  <div className="welcome-feature-icon"><ZapIcon size={18} /></div>
                   <span>Ghost-text Completion</span>
                 </div>
                 <div className="welcome-feature">
-                  <div className="welcome-feature-icon">✨</div>
+                  <div className="welcome-feature-icon"><SparkleIcon size={18} /></div>
                   <span>Inline Edit</span>
                 </div>
                 <div className="welcome-feature">
-                  <div className="welcome-feature-icon">📥</div>
+                  <div className="welcome-feature-icon"><InboxIcon size={18} /></div>
                   <span>Apply to File</span>
                 </div>
                 <div className="welcome-feature">
-                  <div className="welcome-feature-icon">🤖</div>
+                  <div className="welcome-feature-icon"><BotIcon size={18} /></div>
                   <span>Agent Mode</span>
                 </div>
               </div>
@@ -1262,7 +1292,7 @@ export default function App() {
                   <button className={'bottom-panel-tab' + (bottomPanelTab === 'output' ? ' active' : '')}
                     onClick={() => setBottomPanelTab('output')}>Output</button>
                 </div>
-                <button className="icon-btn" title="Close panel" onClick={() => setBottomPanelTab(null)}>✕</button>
+                <button className="icon-btn" title="Close panel" onClick={() => setBottomPanelTab(null)}><CloseIcon size={14} /></button>
               </div>
               <div className="bottom-panel-body">
                 {bottomPanelTab === 'preview' && (
@@ -1289,7 +1319,7 @@ export default function App() {
       {/* Chat Pane */}
       <div className="chat-pane" style={{ width: chatPaneWidth, flex: '0 0 auto' }}>
         <div className="chat-header">
-          <h3>💬 AI Assistant</h3>
+          <h3 className="modal-title"><ChatIcon size={16} /> AI Assistant</h3>
           <div className="chat-header-actions">
             <button className="icon-btn" onClick={handleClearChat} title="Clear chat">
               <TrashIcon />
@@ -1303,7 +1333,7 @@ export default function App() {
         <div className="chat-messages">
           {!hasKeys && (
             <div className="empty-state">
-              <p>👋 Welcome! Add your API keys in Settings to start chatting.</p>
+              <p>Welcome! Add your API keys in Settings to start chatting.</p>
             </div>
           )}
 
@@ -1359,7 +1389,7 @@ export default function App() {
                 <div className="message-content">{agentTurn.instruction}</div>
               </div>
               <div className="message assistant agent-turn">
-                <div className="message-role">🤖 Agent</div>
+                <div className="message-role"><BotIcon size={12} /> Agent</div>
                 <div className="message-content">
                   {agentTurn.plan && (
                     <div className="agent-plan">
@@ -1390,9 +1420,9 @@ export default function App() {
                           <button className="settings-btn primary" onClick={() => setAgentDiffOpen(true)}>Review changes</button>
                         </div>
                       ) : agentTurn.applied ? (
-                        <span className="agent-status-note applied">✓ Applied</span>
+                        <span className="agent-status-note applied"><CheckIcon size={12} /> Applied</span>
                       ) : agentTurn.rejected ? (
-                        <span className="agent-status-note rejected">✕ Rejected</span>
+                        <span className="agent-status-note rejected"><CloseIcon size={12} /> Rejected</span>
                       ) : null}
                     </div>
                   )}
@@ -1418,7 +1448,7 @@ export default function App() {
                     : 'Let the agent inspect and modify the project for you'
                 }
               >
-                {m === 'ask' ? '💬 Ask' : m === 'edit' ? '✨ Edit' : '🤖 Agent'}
+                {m === 'ask' ? <><ChatIcon size={13} /> Ask</> : m === 'edit' ? <><SparkleIcon size={13} /> Edit</> : <><BotIcon size={13} /> Agent</>}
               </button>
             ))}
           </div>
@@ -1445,7 +1475,7 @@ export default function App() {
                         });
                       }}
                     >
-                      📄 {f.path}
+                      <FileIcon size={12} /> {f.path}
                     </button>
                   ))}
                 </div>
@@ -1490,25 +1520,25 @@ export default function App() {
               <span>{currentFile ? currentFile.name : 'No file open'}</span>
               {currentFile && (
                 <button className="ai-edit-trigger" onClick={() => openAiEdit()} title="Edit with AI (Ctrl+K)">
-                  ✨ Ctrl+K
+                  <SparkleIcon size={12} /> Ctrl+K
                 </button>
               )}
               {currentFile && (
                 <button className="ai-edit-trigger" onClick={handleReviewFile} disabled={isStreaming} title="AI reviews the current file for bugs/improvements">
-                  🔍 Review
+                  <SearchIcon size={12} /> Review
                 </button>
               )}
               <button className="ai-edit-trigger" onClick={openExplainError} disabled={isStreaming} title="Paste an error/stack trace for the AI to explain">
-                🐛 Explain Error
+                <BugIcon size={12} /> Explain Error
               </button>
               <button className="ai-edit-trigger" onClick={() => setFindOpen(true)} title="Find in Project (Ctrl+Shift+F)">
-                🔎 Find
+                <SearchIcon size={12} /> Find
               </button>
               <button className="ai-edit-trigger" onClick={() => setPaletteOpen(true)} title="Command Palette (Ctrl+Shift+P)">
-                ⌘ Palette
+                <CommandIcon size={12} /> Palette
               </button>
               <button className="ai-edit-trigger" onClick={() => setHistoryOpen(true)} title="View/revert AI edit history">
-                🕐 History{editHistory.history.length > 0 ? ` (${editHistory.history.length})` : ''}
+                <ClockIcon size={12} /> History{editHistory.history.length > 0 ? ` (${editHistory.history.length})` : ''}
               </button>
             </div>
             <div className="composer-footer-right">

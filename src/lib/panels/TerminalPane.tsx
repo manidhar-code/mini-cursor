@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { RunEntry } from '../../hooks/useRunner';
 import type { OpenFile } from '../../types';
+import { PlayIcon, TrashIcon } from '../icons/Icons';
 
 function EntryBlock({ entry }: { entry: RunEntry }) {
   const { outcome } = entry;
@@ -58,9 +59,9 @@ export function TerminalPane({
           disabled={!currentFile || running}
           title="Run the current file (Ctrl+Enter)"
         >
-          {running ? 'Running…' : '▶ Run'}
+          {running ? 'Running…' : <><PlayIcon size={12} /> Run</>}
         </button>
-        <button className="icon-btn" title="Clear terminal" onClick={onClear}>🗑</button>
+        <button className="icon-btn" title="Clear terminal" onClick={onClear}><TrashIcon size={13} /></button>
         <span className="panel-toolbar-hint">
           {currentFile ? currentFile.name : 'No file open'}
         </span>

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { buildPreviewDoc } from '../sandbox/buildPreviewDoc';
 import type { OpenFile } from '../../types';
+import { RefreshIcon } from '../icons/Icons';
 
 const DEBOUNCE_MS = 400;
 
@@ -34,7 +35,7 @@ export function PreviewPane({ openFiles, activeFilePath }: { openFiles: OpenFile
   return (
     <div className="preview-pane">
       <div className="panel-toolbar">
-        <button className="icon-btn" title="Reload preview" onClick={() => setRefreshKey((k) => k + 1)}>⟳</button>
+        <button className="icon-btn" title="Reload preview" onClick={() => setRefreshKey((k) => k + 1)}><RefreshIcon size={13} /></button>
         <span className="panel-toolbar-hint">Live preview — updates automatically as you type</span>
       </div>
       <iframe

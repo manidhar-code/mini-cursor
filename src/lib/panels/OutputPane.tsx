@@ -1,4 +1,5 @@
 import type { RunEntry } from '../../hooks/useRunner';
+import { CopyIcon } from '../icons/Icons';
 
 export function OutputPane({ latest }: { latest: RunEntry | null }) {
   if (!latest) {
@@ -25,7 +26,7 @@ export function OutputPane({ latest }: { latest: RunEntry | null }) {
     <div className="output-pane">
       <div className="panel-toolbar">
         <span className="panel-toolbar-hint">{latest.fileName}{latest.running ? ' — running…' : ''}</span>
-        <button className="icon-btn" title="Copy output" onClick={copy} disabled={!raw}>⧉</button>
+        <button className="icon-btn" title="Copy output" onClick={copy} disabled={!raw}><CopyIcon size={13} /></button>
       </div>
       <pre className="output-content">{raw || (latest.running ? 'Running…' : '(no output)')}</pre>
     </div>

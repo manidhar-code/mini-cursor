@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { buildFileTree, type TreeNode } from '../utils/fileTree';
 import type { OpenFile } from '../../types';
+import { FolderIcon, FileIcon, ChevronRightIcon, ChevronDownIcon, CloseIcon, PlusIcon } from '../icons/Icons';
 
 function FolderRow({
   node, depth, activeFile, onSelect, onDelete, collapsed, onToggle,
@@ -21,8 +22,8 @@ function FolderRow({
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => onToggle(node.path)}
       >
-        <span className="file-tree-caret">{isCollapsed ? '▸' : '▾'}</span>
-        <span className="file-tree-icon">📁</span>
+        <span className="file-tree-caret">{isCollapsed ? <ChevronRightIcon size={12} /> : <ChevronDownIcon size={12} />}</span>
+        <span className="file-tree-icon"><FolderIcon size={14} /></span>
         <span className="file-tree-name">{node.name}</span>
       </div>
       {!isCollapsed && (
@@ -71,14 +72,14 @@ function TreeNodes(props: {
             style={{ paddingLeft: 8 + depth * 14 }}
             onClick={() => onSelect(node.path)}
           >
-            <span className="file-tree-icon">📄</span>
+            <span className="file-tree-icon"><FileIcon size={13} /></span>
             <span className="file-tree-name">{node.name}</span>
             <button
               className="file-tree-delete"
               title="Delete file"
               onClick={(e) => { e.stopPropagation(); onDelete(node.path); }}
             >
-              ✕
+              <CloseIcon size={11} />
             </button>
           </div>
         ),
@@ -111,7 +112,7 @@ export function FileExplorer({
     <div className="file-explorer">
       <div className="file-explorer-header">
         <span>PROJECT FILES</span>
-        <button className="icon-btn" title="New file (you can include a folder, e.g. src/App.tsx)" onClick={onNewFile}>+</button>
+        <button className="icon-btn" title="New file (you can include a folder, e.g. src/App.tsx)" onClick={onNewFile}><PlusIcon size={14} /></button>
       </div>
       <div className="file-tree">
         {files.length === 0 ? (
