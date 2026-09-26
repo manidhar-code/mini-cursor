@@ -49,3 +49,10 @@ export const InboxIcon = (p: IconProps) => <Base {...p}><path d="M4 12h4l2 3h4l2
 export const PlayIcon = (p: IconProps) => <Base {...p}><path d="M6 4l14 8-14 8z" /></Base>;
 export const ChevronRightIcon = (p: IconProps) => <Base {...p}><path d="M9 5l7 7-7 7" /></Base>;
 export const ChevronDownIcon = (p: IconProps) => <Base {...p}><path d="M5 9l7 7 7-7" /></Base>;
+export const SendIcon = (p: IconProps) => <Base {...p}><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></Base>;
+export const SettingsGearIcon = (p: IconProps) => (
+  <Base {...p}>
+    <circle cx="12" cy="12" r="3" />
+    <path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42" />
+  </Base>
+);
