@@ -1227,7 +1227,7 @@ export default function App() {
               theme={settings.theme === 'light' ? 'vs' : 'vs-dark'}
               options={{
                 fontSize: settings.editorFontSize,
-                fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', monospace",
+                fontFamily: "'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace",
                 minimap: { enabled: true, scale: 1 },
                 padding: { top: 12, bottom: 12 },
                 scrollBeyondLastLine: false,
@@ -1542,6 +1542,7 @@ export default function App() {
               </button>
             </div>
             <div className="composer-footer-right">
+              <span className={'provider-dot ' + settings.preferredProvider} title={settings.preferredProvider} />
               <select
                 className="model-select"
                 value={selectedUnifiedKey}
