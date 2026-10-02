@@ -5,6 +5,8 @@ import { AGENT_TOOLS, describeToolCall, validateToolArgs } from './tools';
 import { buildAgentSystemPrompt, buildPlanningPrompt } from './systemPrompt';
 import { executeTool, resolveFiles, type OverlayMap } from './executor';
 import { getCommandRunner } from './commandRunner';
+import { findProjectRules } from './projectRules';
+import { toolCallSignature, classifyRepetition } from './loopDetection';
 import type { AgentActivityEvent, AgentRunResult, CommandAttempt, PendingFileChange } from './types';
 
 const MAX_ITERATIONS = 20; // Phase 3/9: never loop forever
@@ -68,13 +70,24 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
   const commandAttempts: CommandAttempt[] = [];
   const commandCallCount = { current: 0 };
 
-  const initialPaths = resolveFiles(files, overlay).map((f) => f.path);
+  const resolvedInitial = resolveFiles(files, overlay);
+  const initialPaths = resolvedInitial.map((f) => f.path);
   succeed('understand', 'Understanding request');
   emit({
     id: 'inspect',
     label: 'Inspecting project (' + initialPaths.length + ' file' + (initialPaths.length === 1 ? '' : 's') + ')',
     status: 'success',
   });
+
+  const projectRules = findProjectRules(resolvedInitial);
+  if (projectRules) {
+    emit({
+      id: 'rules',
+      label: 'Using project rules from ' + projectRules.path,
+      status: 'info',
+      detail: projectRules.truncated ? 'Rules file was truncated to fit the size limit.' : undefined,
+    });
+  }
 
   // ── Phase 11: short up-front plan for non-trivial tasks ──
   let plan: string | null = null;
@@ -102,13 +115,14 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
   // particular) reject a conversation that ends on `assistant` right before
   // asking for the next completion; it must end on `user` or `tool`.
   const conversation: AgentMessage[] = [
-    { role: 'system', content: buildAgentSystemPrompt(initialPaths, plan) },
+    { role: 'system', content: buildAgentSystemPrompt(initialPaths, plan, projectRules) },
     { role: 'user', content: instruction },
   ];
 
   let iter = 0;
   let finalMessage = '';
   let stoppedReason: AgentRunResult['stoppedReason'] = 'done';
+  const callSignatureCounts = new Map<string, number>(); // loop / repeated-action detection
 
   while (iter < MAX_ITERATIONS) {
     iter++;
@@ -142,6 +156,7 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
     succeed(stepId, response.toolCalls.length + ' tool call' + (response.toolCalls.length === 1 ? '' : 's'));
     conversation.push({ role: 'assistant', content: response.content || '', tool_calls: response.toolCalls });
 
+    let loopDetected = false;
     for (const call of response.toolCalls) {
       const callId = call.id;
       const label = describeToolCall(call.function.name, call.function.arguments);
@@ -161,6 +176,46 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
         continue;
       }
 
+      // Loop / repeated-action detection: the same tool called with the
+      // exact same arguments, over and over, is the dominant symptom of a
+      // model stuck re-emitting an edit that "isn't working" — usually
+      // because it never actually looked at the tool result that already
+      // explained why. Nudge at 3 repeats, give up at 5 rather than
+      // silently burning through the rest of MAX_ITERATIONS.
+      const signature = toolCallSignature(call.function.name, validated.value);
+      const count = (callSignatureCounts.get(signature) ?? 0) + 1;
+      callSignatureCounts.set(signature, count);
+      const repetition = classifyRepetition(count);
+
+      if (repetition === 'abort') {
+        conversation.push({
+          role: 'tool', tool_call_id: callId,
+          content: JSON.stringify({ error: 'Stopped: this exact action has been called ' + count + ' times with identical arguments.' }),
+        });
+        fail(callId, label, 'Repeated ' + count + 'x with no progress — stopping to avoid a loop');
+        stoppedReason = 'loop_detected';
+        finalMessage =
+          'The agent stopped because it repeated the exact same action (' + label + ') ' + count + ' times in a row ' +
+          'without making progress — a sign it\'s stuck rather than actually working through the task. ' +
+          'Review what changed so far below, then try rephrasing your request or breaking it into a smaller step.';
+        loopDetected = true;
+        break;
+      }
+
+      if (repetition === 'warn') {
+        conversation.push({
+          role: 'tool', tool_call_id: callId,
+          content: JSON.stringify({
+            warning:
+              'You have already called this exact action ' + (count - 1) + ' time(s) before with identical arguments. ' +
+              'Repeating it again is unlikely to help. Either explain what is actually blocking progress and try a ' +
+              'different approach, or say so if the task already looks complete.',
+          }),
+        });
+        emit({ id: callId, label, status: 'info', detail: 'Repeated action (' + count + 'x) — nudged to reconsider instead of re-running it' });
+        continue;
+      }
+
       const result = await executeTool(call.function.name, validated.value, {
         files, overlay, pendingChanges, commandRunner, commandCallCount,
       });
@@ -171,6 +226,7 @@ export async function runAgent(params: RunAgentParams): Promise<AgentRunResult> 
       if (result.ok) succeed(callId, label, result.summary);
       else fail(callId, label, result.summary);
     }
+    if (loopDetected) break;
   }
 
   if (iter >= MAX_ITERATIONS && !finalMessage) {

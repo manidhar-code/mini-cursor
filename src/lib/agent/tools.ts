@@ -83,6 +83,50 @@ export const AGENT_TOOLS: ToolDefinition[] = [
   {
     type: 'function',
     function: {
+      name: 'replace_range',
+      description:
+        'Replace a specific range of lines in an existing file with new content — the precise, ' +
+        'token-efficient way to make a targeted edit without re-emitting the whole file. Line numbers ' +
+        'are 1-indexed and inclusive; use startLine equal to endLine to replace a single line, or an ' +
+        'empty newContent to delete the range. read_file first so your line numbers are accurate. ' +
+        'On success the result includes the file\'s full up-to-date content: use THOSE line numbers ' +
+        'for any further edit to the same file in this run, because every earlier edit shifts the ' +
+        'lines below it.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          startLine: { type: 'number', description: '1-indexed first line to replace (inclusive)' },
+          endLine: { type: 'number', description: '1-indexed last line to replace (inclusive)' },
+          newContent: { type: 'string', description: 'Text to put in place of that range. Do not include line numbers.' },
+        },
+        required: ['path', 'startLine', 'endLine', 'newContent'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'insert_after',
+      description:
+        'Insert new content immediately after a specific line without touching anything else in the ' +
+        'file. Use afterLine 0 to insert at the very top. read_file first for accurate line numbers; ' +
+        'on success the result includes the file\'s full up-to-date content — use those line numbers ' +
+        'for any further edit to the same file in this run.',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          afterLine: { type: 'number', description: '1-indexed line to insert after; 0 inserts before the first line' },
+          content: { type: 'string', description: 'Text to insert (one or more lines). Do not include line numbers.' },
+        },
+        required: ['path', 'afterLine', 'content'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'delete_file',
       description:
         'Stage deletion of a file. Destructive — only call this when the task clearly requires ' +
@@ -128,7 +172,7 @@ export type ValidatedArgs =
   | { ok: true; value: Record<string, string> }
   | { ok: false; error: string };
 
-const PATH_ARG_TOOLS = new Set(['read_file', 'create_file', 'update_file', 'delete_file', 'rename_file']);
+const PATH_ARG_TOOLS = new Set(['read_file', 'create_file', 'update_file', 'replace_range', 'insert_after', 'delete_file', 'rename_file']);
 
 function isSafePath(path: unknown): path is string {
   if (typeof path !== 'string' || !path.trim()) return false;
@@ -169,6 +213,24 @@ export function validateToolArgs(name: string, args: unknown): ValidatedArgs {
       if (typeof a.content !== 'string') return { ok: false, error: 'A "content" string is required.' };
       return { ok: true, value: { path: a.path, content: a.content } };
 
+    case 'replace_range': {
+      if (!isSafePath(a.path)) return { ok: false, error: 'A valid relative "path" string is required.' };
+      const start = Number(a.startLine);
+      const end = Number(a.endLine);
+      if (!Number.isInteger(start) || start < 1) return { ok: false, error: '"startLine" must be a positive integer.' };
+      if (!Number.isInteger(end) || end < start) return { ok: false, error: '"endLine" must be an integer >= startLine.' };
+      if (typeof a.newContent !== 'string') return { ok: false, error: 'A "newContent" string is required (use "" to delete the range).' };
+      return { ok: true, value: { path: a.path, startLine: String(start), endLine: String(end), newContent: a.newContent } };
+    }
+
+    case 'insert_after': {
+      if (!isSafePath(a.path)) return { ok: false, error: 'A valid relative "path" string is required.' };
+      const after = Number(a.afterLine);
+      if (!Number.isInteger(after) || after < 0) return { ok: false, error: '"afterLine" must be a non-negative integer.' };
+      if (typeof a.content !== 'string') return { ok: false, error: 'A "content" string is required.' };
+      return { ok: true, value: { path: a.path, afterLine: String(after), content: a.content } };
+    }
+
     case 'rename_file':
       if (!isSafePath(a.path)) return { ok: false, error: 'A valid relative "path" string is required.' };
       if (!isSafePath(a.newPath)) return { ok: false, error: 'A valid relative "newPath" string is required.' };
@@ -201,6 +263,8 @@ export function describeToolCall(name: string, rawArgs: string): string {
     case 'search_files': return 'Searching for "' + (a.query ?? '') + '"';
     case 'create_file': return 'Creating ' + (a.path ?? 'file');
     case 'update_file': return 'Editing ' + (a.path ?? 'file');
+    case 'replace_range': return 'Editing ' + (a.path ?? 'file') + ' (lines ' + (a.startLine ?? '?') + '-' + (a.endLine ?? '?') + ')';
+    case 'insert_after': return 'Inserting into ' + (a.path ?? 'file') + ' (after line ' + (a.afterLine ?? '?') + ')';
     case 'delete_file': return 'Deleting ' + (a.path ?? 'file');
     case 'rename_file': return 'Renaming ' + (a.path ?? '?') + ' → ' + (a.newPath ?? '?');
     case 'run_command': return 'Running ' + (a.command ?? 'command');

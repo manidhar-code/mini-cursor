@@ -40,7 +40,7 @@ export function applyPendingChanges(files: OpenFile[], changes: PendingFileChang
         next = next.some((f) => f.path === change.path)
           ? next.map((f) =>
               f.path === change.path
-                ? { ...f, path: change.newPath, name: baseName(change.newPath), language: detectLanguage(change.newPath), modified: true }
+                ? { ...f, path: change.newPath, name: baseName(change.newPath), language: detectLanguage(change.newPath), content: change.content, modified: true }
                 : f,
             )
           : [

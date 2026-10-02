@@ -9,6 +9,7 @@ import type { OpenFile, FileNode } from '../../types';
 import type { CommandRunner } from './commandRunner';
 import type { CommandAttempt, PendingFileChange } from './types';
 import { changedFraction } from './diff';
+import { applyReplaceRange, applyInsertAfter } from './patch';
 import { isCommandAllowed } from './tools';
 
 export type OverlayMap = Map<string, string | null>; // null = deleted-in-this-run
@@ -83,6 +84,42 @@ function findPendingDestructiveMerge(
   path: string,
 ): PendingFileChange | undefined {
   return pending.get(path);
+}
+
+/** Stages new full content for an already-existing path, merging correctly
+ * with whatever this run has already staged for it. Shared by update_file,
+ * replace_range and insert_after so the create-vs-update bookkeeping lives
+ * in exactly one place:
+ *  - if this run created the file, it stays a 'create' (with the new content)
+ *  - if this run renamed it, it stays a 'rename' carrying the edited content
+ *  - otherwise it's an 'update', diffed against the ORIGINAL pre-run content
+ *    (not an intermediate staged version), so multiple edits to one file
+ *    collapse into a single coherent diff for the reviewer. */
+function stageUpdate(
+  ctx: Pick<ToolExecContext, 'overlay' | 'pendingChanges'>,
+  path: string,
+  currentContent: string,
+  newContent: string,
+): void {
+  const { overlay, pendingChanges } = ctx;
+  const existingChange = pendingChanges.get(path);
+  const oldContent = existingChange && existingChange.kind === 'update' ? existingChange.oldContent : currentContent;
+  overlay.set(path, newContent);
+  if (existingChange && existingChange.kind === 'create') {
+    pendingChanges.set(path, { kind: 'create', path, newContent, destructive: false });
+  } else if (existingChange && existingChange.kind === 'rename') {
+    // Edited after being renamed earlier in this run: `path` here is the NEW
+    // path. Stay a rename (so the move isn't lost) but carry the edited content.
+    pendingChanges.set(path, { ...existingChange, content: newContent });
+  } else {
+    pendingChanges.set(path, {
+      kind: 'update',
+      path,
+      oldContent,
+      newContent,
+      destructive: changedFraction(oldContent, newContent) > 0.5,
+    });
+  }
 }
 
 export async function executeTool(
@@ -162,21 +199,50 @@ export async function executeTool(
       if (!hit) {
         return { ok: false, summary: 'Not found: ' + args.path, payload: { error: 'No file at path "' + args.path + '". Use create_file if this should be new.' } };
       }
-      const existingChange = pendingChanges.get(args.path);
-      const oldContent = existingChange && existingChange.kind === 'update' ? existingChange.oldContent : hit.content;
-      overlay.set(args.path, args.content);
-      if (existingChange && existingChange.kind === 'create') {
-        pendingChanges.set(args.path, { kind: 'create', path: args.path, newContent: args.content, destructive: false });
-      } else {
-        pendingChanges.set(args.path, {
-          kind: 'update',
-          path: args.path,
-          oldContent,
-          newContent: args.content,
-          destructive: changedFraction(oldContent, args.content) > 0.5,
-        });
-      }
+      stageUpdate(ctx, args.path, hit.content, args.content);
       return { ok: true, summary: 'Staged edit to ' + args.path, payload: { path: args.path, staged: true } };
+    }
+
+    case 'replace_range': {
+      const resolved = resolveFiles(files, overlay);
+      const hit = resolved.find((f) => f.path === args.path);
+      if (!hit) {
+        return { ok: false, summary: 'Not found: ' + args.path, payload: { error: 'No file at path "' + args.path + '". Use create_file if this should be new.' } };
+      }
+      const startLine = Number(args.startLine);
+      const endLine = Number(args.endLine);
+      const patched = applyReplaceRange(hit.content, startLine, endLine, args.newContent);
+      if (!patched.ok) {
+        return { ok: false, summary: 'Edit rejected', payload: { error: patched.error } };
+      }
+      stageUpdate(ctx, args.path, hit.content, patched.content);
+      return {
+        ok: true,
+        summary: 'Replaced lines ' + startLine + '-' + endLine + ' in ' + args.path,
+        // Full updated content is returned on purpose: this edit shifts every
+        // line below it, so the model needs fresh, correct line numbers for
+        // any follow-up patch to the same file.
+        payload: { path: args.path, staged: true, lineCount: patched.lineCount, content: patched.content },
+      };
+    }
+
+    case 'insert_after': {
+      const resolved = resolveFiles(files, overlay);
+      const hit = resolved.find((f) => f.path === args.path);
+      if (!hit) {
+        return { ok: false, summary: 'Not found: ' + args.path, payload: { error: 'No file at path "' + args.path + '". Use create_file if this should be new.' } };
+      }
+      const afterLine = Number(args.afterLine);
+      const patched = applyInsertAfter(hit.content, afterLine, args.content);
+      if (!patched.ok) {
+        return { ok: false, summary: 'Edit rejected', payload: { error: patched.error } };
+      }
+      stageUpdate(ctx, args.path, hit.content, patched.content);
+      return {
+        ok: true,
+        summary: 'Inserted after line ' + afterLine + ' in ' + args.path,
+        payload: { path: args.path, staged: true, lineCount: patched.lineCount, content: patched.content },
+      };
     }
 
     case 'delete_file': {

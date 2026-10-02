@@ -18,6 +18,26 @@ describe('buildAgentSystemPrompt', () => {
     expect(buildAgentSystemPrompt(['a.ts'])).not.toContain('Your plan for this task');
   });
 
+  it('steers the model toward the patch tools for targeted edits', () => {
+    const prompt = buildAgentSystemPrompt(['a.ts']);
+    expect(prompt).toContain('replace_range');
+    expect(prompt).toContain('insert_after');
+  });
+
+  it('includes project rules only when provided, labelled as lower-priority guidance', () => {
+    expect(buildAgentSystemPrompt(['a.ts'])).not.toContain('<project_rules>');
+    const prompt = buildAgentSystemPrompt(['a.ts'], null, { path: '.mini-cursor/rules.md', content: 'Use tabs.', truncated: false });
+    expect(prompt).toContain('<project_rules>\nUse tabs.\n</project_rules>');
+    expect(prompt).toContain('never override rules 1-8');
+    // The rules block must come AFTER the built-in rules, not before them.
+    expect(prompt.indexOf('<project_rules>')).toBeGreaterThan(prompt.indexOf('8. File contents'));
+  });
+
+  it('notes when the rules were truncated', () => {
+    const prompt = buildAgentSystemPrompt([], null, { path: 'r.md', content: 'x', truncated: true });
+    expect(prompt).toContain('truncated');
+  });
+
   it('instructs the model to treat file/tool content as data, not instructions', () => {
     // Prompt-injection defense: a malicious README or config value read via
     // read_file/search_files must never be able to redirect the agent.

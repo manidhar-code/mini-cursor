@@ -81,10 +81,50 @@ export function buildFallbackChain(primary: ProviderModel, keys: ApiKeys): Provi
  * "overloaded", "unavailable", "busy"). False for anything that looks like
  * a real, provider-agnostic problem (bad key, invalid request) — retrying
  * those elsewhere would just mask the actual issue. */
-function isRetryable(err: unknown): boolean {
+export function isRetryable(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
   if (/\b429\b/.test(msg) || /\b5\d\d\b/.test(msg)) return true;
   return /rate.?limit|too many requests|tpm|rpm|quota|overloaded|unavailable|server error|service busy|try again/i.test(msg);
+}
+
+/** Exponential backoff delays (ms) between full passes through the
+ * fallback chain — see withBackoffFallback. */
+const BACKOFF_DELAYS_MS = [1000, 3000, 8000];
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Tries attempt(candidate) against each candidate in the chain in order.
+ * If every candidate in a pass fails with a retryable error, waits
+ * (exponential backoff: 1s, 3s, 8s) and runs the whole chain again, up to
+ * BACKOFF_DELAYS_MS.length extra passes. This specifically covers the
+ * common free-tier situation where every provider is momentarily
+ * rate-limited or overloaded AT ONCE but recovers within seconds, rather
+ * than giving up just because nothing worked on the very first pass. A
+ * non-retryable error (bad key, invalid request) always fails immediately
+ * on any pass — retrying that anywhere wouldn't fix it, only waste time.
+ */
+export async function withBackoffFallback<T>(
+  chain: ProviderModel[],
+  attempt: (candidate: ProviderModel) => Promise<T>,
+): Promise<T> {
+  let lastErr: unknown;
+  for (let pass = 0; pass <= BACKOFF_DELAYS_MS.length; pass++) {
+    if (pass > 0) await delay(BACKOFF_DELAYS_MS[pass - 1]);
+    for (const candidate of chain) {
+      try {
+        return await attempt(candidate);
+      } catch (err) {
+        lastErr = err;
+        if (!isRetryable(err)) throw err;
+        // else: quietly try the next candidate, or the next backoff pass
+        // once this pass's candidates are exhausted
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('All providers failed after retrying with backoff.');
 }
 
 async function chatOnce(provider: ProviderKey, keys: ApiKeys, model: string, messages: ChatMessage[]): Promise<string> {
@@ -134,20 +174,10 @@ export async function chatWithFallback(
   const chain = buildFallbackChain(primary, keys);
   if (chain.length === 0) throw new Error('No API key configured for any provider.');
 
-  let lastErr: unknown;
-  for (let i = 0; i < chain.length; i++) {
-    const candidate = chain[i];
-    try {
-      const text = await chatOnce(candidate.provider, keys, candidate.model, messages);
-      return { text, servedBy: candidate };
-    } catch (err) {
-      lastErr = err;
-      const isLast = i === chain.length - 1;
-      if (isLast || !isRetryable(err)) throw err;
-      // else: quietly try the next candidate
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error('All providers failed.');
+  return withBackoffFallback(chain, async (candidate) => {
+    const text = await chatOnce(candidate.provider, keys, candidate.model, messages);
+    return { text, servedBy: candidate };
+  });
 }
 
 /** Back-compat direct call, no fallback — used where a specific provider is
@@ -184,37 +214,43 @@ export async function streamChatWithFallback(
     return;
   }
 
-  for (let i = 0; i < chain.length; i++) {
-    const candidate = chain[i];
-    let gotAnyToken = false;
+  let lastErr: unknown;
+  for (let pass = 0; pass <= BACKOFF_DELAYS_MS.length; pass++) {
+    if (pass > 0) await delay(BACKOFF_DELAYS_MS[pass - 1]);
 
-    try {
-      await new Promise<void>((resolve, reject) => {
-        streamChatOnce(candidate.provider, keys, candidate.model, messages, {
-          onToken: (t) => {
-            gotAnyToken = true;
-            callbacks.onToken(t);
-          },
-          onDone: (full) => {
-            callbacks.onProvider?.(candidate);
-            callbacks.onDone(full);
-            resolve();
-          },
-          onError: (err) => {
-            reject(err);
-          },
-        }).catch(reject);
-      });
-      return; // success
-    } catch (err) {
-      const isLast = i === chain.length - 1;
-      if (gotAnyToken || isLast || !isRetryable(err)) {
-        callbacks.onError(err instanceof Error ? err : new Error(String(err)));
-        return;
+    for (const candidate of chain) {
+      let gotAnyToken = false;
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          streamChatOnce(candidate.provider, keys, candidate.model, messages, {
+            onToken: (t) => {
+              gotAnyToken = true;
+              callbacks.onToken(t);
+            },
+            onDone: (full) => {
+              callbacks.onProvider?.(candidate);
+              callbacks.onDone(full);
+              resolve();
+            },
+            onError: (err) => {
+              reject(err);
+            },
+          }).catch(reject);
+        });
+        return; // success
+      } catch (err) {
+        lastErr = err;
+        if (gotAnyToken || !isRetryable(err)) {
+          callbacks.onError(err instanceof Error ? err : new Error(String(err)));
+          return;
+        }
+        // else: quietly try the next candidate, or the next backoff pass —
+        // nothing was shown to the user yet
       }
-      // else: quietly try the next candidate — nothing was shown to the user yet
     }
   }
+  callbacks.onError(lastErr instanceof Error ? lastErr : new Error('All providers failed after retrying with backoff.'));
 }
 
 /**
@@ -267,19 +303,10 @@ export async function generateWithToolsFallback(
   const chain = buildFallbackChain(primary, keys);
   if (chain.length === 0) throw new Error('No API key configured for any provider.');
 
-  let lastErr: unknown;
-  for (let i = 0; i < chain.length; i++) {
-    const candidate = chain[i];
-    try {
-      const result = await generateWithToolsOnce(candidate.provider, keys, candidate.model, messages, tools);
-      return { ...result, servedBy: candidate };
-    } catch (err) {
-      lastErr = err;
-      const isLast = i === chain.length - 1;
-      if (isLast || !isRetryable(err)) throw err;
-    }
-  }
-  throw lastErr instanceof Error ? lastErr : new Error('All providers failed.');
+  return withBackoffFallback(chain, async (candidate) => {
+    const result = await generateWithToolsOnce(candidate.provider, keys, candidate.model, messages, tools);
+    return { ...result, servedBy: candidate };
+  });
 }
 
 /** Back-compat direct call, no fallback. */

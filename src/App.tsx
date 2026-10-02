@@ -37,6 +37,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { AiEditModal, ExplainErrorModal } from './components/EditModals';
 import { AgentActivityFeed, AgentDiffModal } from './components/AgentDiffModal';
 import type { AgentActivityEvent, PendingFileChange } from './lib/agent/types';
+import { PROJECT_RULES_PATH, PROJECT_RULES_TEMPLATE } from './lib/agent/projectRules';
 import type { OpenFile, ProviderKey, AiMode } from './types';
 
 type BottomPanelTab = 'preview' | 'terminal' | 'output' | null;
@@ -209,6 +210,25 @@ export default function App() {
       { path: name, name, content: '', language: detectLanguage(name), modified: true },
     ]);
     setActiveFile(name);
+  }, []);
+
+  // Opens the existing .mini-cursor/rules.md, or creates it with a starter
+  // template if the project doesn't have one yet — Agent mode reads this
+  // file automatically on every run (see orchestrator.ts/projectRules.ts).
+  const openProjectRulesFile = useCallback(() => {
+    setOpenFiles((prev) => {
+      const existing = prev.find((f) => f.path === PROJECT_RULES_PATH || f.path.endsWith('/' + PROJECT_RULES_PATH));
+      if (existing) {
+        setActiveFile(existing.path);
+        return prev;
+      }
+      const nf: OpenFile = {
+        path: PROJECT_RULES_PATH, name: 'rules.md',
+        content: PROJECT_RULES_TEMPLATE, language: detectLanguage(PROJECT_RULES_PATH), modified: true,
+      };
+      setActiveFile(PROJECT_RULES_PATH);
+      return [...prev, nf];
+    });
   }, []);
 
   // Shared by both "Open Files" and "Open Folder" — the only difference
@@ -660,6 +680,7 @@ export default function App() {
     { id: 'explain-error', label: 'AI: Explain an Error…', action: openExplainError },
     { id: 'find-in-project', label: 'Find in Project…', hint: 'Ctrl+Shift+F', action: () => setFindOpen(true) },
     { id: 'edit-history', label: 'View AI Edit History', action: () => setHistoryOpen(true) },
+    { id: 'project-rules', label: 'Open Project Rules (.mini-cursor/rules.md)', hint: 'read by Agent mode', action: openProjectRulesFile },
     { id: 'toggle-theme', label: settings.theme === 'dark' ? 'Switch to Light Theme' : 'Switch to Dark Theme', action: () => setTheme(settings.theme === 'dark' ? 'light' : 'dark') },
     { id: 'open-settings', label: 'Open Settings', action: () => setSettingsOpen(true) },
     { id: 'clear-chat', label: 'Clear Chat', action: clearChat },

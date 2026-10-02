@@ -22,7 +22,7 @@ export type CommandAttempt = {
   message: string;
 };
 
-export type AgentStoppedReason = 'done' | 'max_iterations' | 'error' | 'rejected';
+export type AgentStoppedReason = 'done' | 'max_iterations' | 'error' | 'rejected' | 'loop_detected';
 
 export type AgentRunResult = {
   activity: AgentActivityEvent[];
